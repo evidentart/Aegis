@@ -15,6 +15,9 @@
       <StackPanel Spacing="8" VerticalAlignment="Center">
         <TextBlock Text="Welcome to Aegis" FontSize="22" FontWeight="SemiBold" />
         <TextBlock Text="Your workspace is ready." Opacity="0.72" />
+        <TextBlock Text="Ask Aegis" FontSize="18" FontWeight="SemiBold" Margin="0,16,0,0" />
+        <TextBox PlaceholderText="Type an investigation question" MinHeight="40" />
+        <Button Content="Investigate" HorizontalAlignment="Left" MinWidth="120" />
       </StackPanel>
     </Border>
   </Grid>
