@@ -16,8 +16,11 @@
         <TextBlock Text="Welcome to Aegis" FontSize="22" FontWeight="SemiBold" />
         <TextBlock Text="Your workspace is ready." Opacity="0.72" />
         <TextBlock Text="Ask Aegis" FontSize="18" FontWeight="SemiBold" Margin="0,16,0,0" />
-        <TextBox PlaceholderText="Type an investigation question" MinHeight="40" />
-        <Button Content="Investigate" HorizontalAlignment="Left" MinWidth="120" />
+        <TextBox x:Name="QuestionTextBox" PlaceholderText="Type an investigation question" MinHeight="40" />
+        <Button x:Name="InvestigateButton" Content="Investigate" Click="InvestigateButton_Click" HorizontalAlignment="Left" MinWidth="120" />
+        <ProgressRing x:Name="BusyIndicator" IsActive="False" Width="24" Height="24" HorizontalAlignment="Left" />
+        <TextBlock x:Name="StatusTextBlock" Opacity="0.72" TextWrapping="Wrap" />
+        <TextBlock x:Name="AnswerTextBlock" TextWrapping="Wrap" Visibility="Collapsed" />
       </StackPanel>
     </Border>
   </Grid>
