@@ -1,0 +1,25 @@
+## Build output
+**/bin/
+**/obj/
+
+## Visual Studio user files
+.vs/
+.dotnet-home/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Test results and coverage
+TestResults/
+*.trx
+coverage/
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+
+## OS files
+.DS_Store
+Thumbs.db
