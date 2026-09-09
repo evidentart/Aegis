@@ -9,7 +9,7 @@ public sealed class ApplicationInfoTests
     public void ApplicationMetadataIsDefined()
     {
         Assert.Equal("Aegis", ApplicationInfo.Name);
-        Assert.Equal("0.1.0", ApplicationInfo.Version);
+        Assert.Equal("0.2.0", ApplicationInfo.Version);
     }
 
     [Fact]
@@ -32,15 +32,41 @@ public sealed class ApplicationInfoTests
         await Assert.ThrowsAsync<ArgumentException>(() => service.InvestigateAsync("  "));
     }
 
+    [Fact]
+    public async Task InvestigationServiceForwardsCancellationToLanguageModel()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var model = new FakeLanguageModel();
+        var service = new InvestigationService(model);
+
+        await service.InvestigateAsync("Question", cancellation.Token);
+
+        Assert.Equal(cancellation.Token, model.LastCancellationToken);
+    }
+
+    [Fact]
+    public async Task InvestigationServiceUsesLanguageModelContract()
+    {
+        ILanguageModel model = new FakeLanguageModel();
+        var service = new InvestigationService(model);
+
+        var response = await service.InvestigateAsync("Question");
+
+        Assert.Equal("Aegis is ready.", response.Answer);
+    }
+
     private sealed class FakeLanguageModel : ILanguageModel
     {
         public string? LastQuestion { get; private set; }
+
+        public CancellationToken LastCancellationToken { get; private set; }
 
         public Task<LanguageModelResponse> CompleteAsync(
             LanguageModelRequest request,
             CancellationToken cancellationToken = default)
         {
             LastQuestion = request.Question;
+            LastCancellationToken = cancellationToken;
             return Task.FromResult(new LanguageModelResponse("Aegis is ready."));
         }
     }
