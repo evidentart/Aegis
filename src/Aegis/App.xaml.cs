@@ -41,7 +41,10 @@ public partial class App : Application
         }
 
         _investigationService = new InvestigationService(
-            new AgentRuntime(languageModel, _observationRuntime));
+            new AgentRuntime(
+                new LanguageModelInvestigationPlanner(languageModel),
+                languageModel,
+                _observationRuntime));
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

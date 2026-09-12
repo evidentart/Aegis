@@ -18,7 +18,7 @@ public sealed class OpenAiLanguageModelTests
             new LanguageModelMessage(LanguageModelMessageRole.Assistant, "Prior decision."),
             new LanguageModelMessage(LanguageModelMessageRole.Observation, "Evidence.")));
 
-        Assert.IsType<FinalAnswerDecision>(response);
+        Assert.Equal(new FinalAnswerDecision("The answer."), response);
         Assert.Collection(
             client.Messages,
             message =>
@@ -44,30 +44,64 @@ public sealed class OpenAiLanguageModelTests
     }
 
     [Fact]
-    public async Task ConvertsObservationRequestDecision()
+    public async Task ConvertsInvestigationPlanDecision()
     {
         var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
-            "{\"kind\":\"observation_request\",\"tool_id\":\"windows.system.info\"}"));
+            "{\"kind\":\"investigation_plan\",\"objective\":\"Inspect the system.\",\"steps\":[{\"step_id\":\"step-1\",\"tool_id\":\"windows.system.info\"}]}"));
 
         var decision = await model.CompleteAsync(CreateRequest(
             new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")));
 
-        Assert.Equal(
-            new ObservationRequestDecision("windows.system.info"),
-            decision);
+        var planDecision = Assert.IsType<InvestigationPlanDecision>(decision);
+        Assert.Equal("Inspect the system.", planDecision.Plan.Objective);
+        var step = Assert.Single(planDecision.Plan.Steps);
+        Assert.Equal("step-1", step.StepId);
+        Assert.Equal("windows.system.info", step.ToolId);
+        Assert.Equal(InvestigationStepStatus.Pending, step.Status);
     }
 
     [Fact]
-    public async Task ConvertsProviderFailureToLanguageModelException()
+    public async Task RejectsEmptyInvestigationPlan()
     {
         var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
-            exception: new InvalidOperationException("provider failure")));
+            "{\"kind\":\"investigation_plan\",\"objective\":\"Inspect the system.\",\"steps\":[]}"));
 
         var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
             model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
 
-        Assert.Equal("The language model request failed.", exception.Message);
-        Assert.IsType<InvalidOperationException>(exception.InnerException);
+        Assert.Equal("The language model returned an invalid decision.", exception.Message);
+    }
+
+    [Fact]
+    public async Task RejectsStepStatusAndArbitraryArguments()
+    {
+        var contents = new[]
+        {
+            "{\"kind\":\"investigation_plan\",\"objective\":\"Inspect.\",\"steps\":[{\"step_id\":\"step-1\",\"tool_id\":\"tool.one\",\"status\":\"Completed\"}]}",
+            "{\"kind\":\"investigation_plan\",\"objective\":\"Inspect.\",\"steps\":[{\"step_id\":\"step-1\",\"tool_id\":\"tool.one\",\"arguments\":{}}]}"
+        };
+
+        foreach (var content in contents)
+        {
+            var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(content));
+
+            var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+                model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
+
+            Assert.Equal("The language model returned an invalid decision.", exception.Message);
+        }
+    }
+
+    [Fact]
+    public async Task RejectsObsoleteObservationRequestDecision()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"kind\":\"observation_request\",\"tool_id\":\"windows.system.info\"}"));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
+
+        Assert.Equal("The language model returned an invalid decision.", exception.Message);
     }
 
     [Theory]
@@ -86,16 +120,31 @@ public sealed class OpenAiLanguageModelTests
         Assert.Equal("The language model returned an invalid decision.", exception.Message);
     }
 
-    [Fact]
-    public async Task RejectsDuplicateProviderDecisionProperties()
+    [Theory]
+    [InlineData("{\"kind\":\"final_answer\",\"answer\":\"one\",\"answer\":\"two\"}")]
+    [InlineData("{\"kind\":\"investigation_plan\",\"objective\":\"Inspect.\",\"objective\":\"Again.\",\"steps\":[{\"step_id\":\"step-1\",\"tool_id\":\"tool.one\"}]}")]
+    [InlineData("{\"kind\":\"investigation_plan\",\"objective\":\"Inspect.\",\"steps\":[{\"step_id\":\"step-1\",\"step_id\":\"step-2\",\"tool_id\":\"tool.one\"}]}")]
+    public async Task RejectsDuplicateProviderDecisionProperties(string content)
     {
-        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
-            "{\"kind\":\"final_answer\",\"answer\":\"one\",\"answer\":\"two\"}"));
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(content));
 
         var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
             model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
 
         Assert.Equal("The language model returned an invalid decision.", exception.Message);
+    }
+
+    [Fact]
+    public async Task PreservesProviderFailure()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            exception: new InvalidOperationException("provider failure")));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
+
+        Assert.Equal("The language model request failed.", exception.Message);
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
     }
 
     [Fact]

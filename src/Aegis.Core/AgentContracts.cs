@@ -4,7 +4,7 @@ public abstract record AgentDecision;
 
 public sealed record FinalAnswerDecision(string Answer) : AgentDecision;
 
-public sealed record ObservationRequestDecision(string ToolId) : AgentDecision;
+public sealed record InvestigationPlanDecision(InvestigationPlan Plan) : AgentDecision;
 
 public sealed record AgentRunResult(string Answer);
 

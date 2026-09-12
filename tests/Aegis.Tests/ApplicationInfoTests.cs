@@ -34,8 +34,9 @@ public sealed class ApplicationInfoTests
 
     private static InvestigationService CreateService(ILanguageModel model) =>
         new(new AgentRuntime(
+            new FixedPlanner(),
             model,
-            new ObservationRuntime(new ObservationRegistry([]))));
+            new ObservationRuntime(new ObservationRegistry([new FixedObservationTool()]))));
 
     [Fact]
     public async Task InvestigationServiceForwardsCancellationToLanguageModel()
@@ -70,11 +71,41 @@ public sealed class ApplicationInfoTests
             LanguageModelRequest request,
             CancellationToken cancellationToken = default)
         {
-            LastQuestion = Assert.Single(request.Messages, message =>
-                    message.Role == LanguageModelMessageRole.User)
+            LastQuestion = request.Messages.First(message =>
+                    message.Role == LanguageModelMessageRole.User &&
+                    message.Content is "What is Aegis?" or "Question" or "Question.")
                 .Content;
             LastCancellationToken = cancellationToken;
             return Task.FromResult<AgentDecision>(new FinalAnswerDecision("Aegis is ready."));
         }
+    }
+
+    private sealed class FixedPlanner : IInvestigationPlanner
+    {
+        public Task<InvestigationPlanDecision> CreatePlanAsync(
+            InvestigationState state,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new InvestigationPlanDecision(new InvestigationPlan(
+                state.Objective,
+                [
+                    new InvestigationStep("step-1", "fixed.tool"),
+                    new InvestigationStep("step-2", "fixed.tool"),
+                    new InvestigationStep("step-3", "fixed.tool")
+                ])));
+    }
+
+    private sealed class FixedObservationTool : IObservationTool
+    {
+        public ObservationToolDescriptor Descriptor { get; } =
+            new("fixed.tool", "Fixed tool", "Test observation tool.");
+
+        public Task<ObservationResult> ObserveAsync(
+            ObservationRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ObservationResult(
+                request.RequestId,
+                request.ToolId,
+                DateTimeOffset.UtcNow,
+                ObservationStatus.Succeeded));
     }
 }

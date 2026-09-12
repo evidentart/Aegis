@@ -118,7 +118,7 @@ internal static class OpenAiDecisionParser
             return kind switch
             {
                 "final_answer" => ParseFinalAnswer(root, propertyNames),
-                "observation_request" => ParseObservationRequest(root, propertyNames),
+                "investigation_plan" => ParseInvestigationPlan(root, propertyNames),
                 _ => throw new InvalidOperationException("The decision kind is not supported.")
             };
         }
@@ -142,12 +142,49 @@ internal static class OpenAiDecisionParser
         return new FinalAnswerDecision(ReadRequiredString(root, "answer"));
     }
 
-    private static AgentDecision ParseObservationRequest(
+    private static AgentDecision ParseInvestigationPlan(
         JsonElement root,
         IReadOnlySet<string> propertyNames)
     {
-        EnsureProperties(propertyNames, "kind", "tool_id");
-        return new ObservationRequestDecision(ReadRequiredString(root, "tool_id"));
+        EnsureProperties(propertyNames, "kind", "objective", "steps");
+        var stepsProperty = root.GetProperty("steps");
+        if (stepsProperty.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("The decision steps property must be an array.");
+        }
+
+        var steps = new List<InvestigationStep>();
+        foreach (var stepProperty in stepsProperty.EnumerateArray())
+        {
+            if (stepProperty.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException("Each investigation step must be an object.");
+            }
+
+            var stepProperties = stepProperty.EnumerateObject().ToArray();
+            var stepPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in stepProperties)
+            {
+                if (!stepPropertyNames.Add(property.Name))
+                {
+                    throw new InvalidOperationException("The investigation step contains duplicate properties.");
+                }
+            }
+
+            EnsureProperties(stepPropertyNames, "step_id", "tool_id");
+            steps.Add(new InvestigationStep(
+                ReadRequiredString(stepProperty, "step_id"),
+                ReadRequiredString(stepProperty, "tool_id")));
+        }
+
+        if (steps.Count == 0)
+        {
+            throw new InvalidOperationException("The investigation plan must contain at least one step.");
+        }
+
+        return new InvestigationPlanDecision(new InvestigationPlan(
+            ReadRequiredString(root, "objective"),
+            steps));
     }
 
     private static string ReadRequiredString(JsonElement root, string propertyName)
