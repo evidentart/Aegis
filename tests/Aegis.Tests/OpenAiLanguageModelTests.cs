@@ -1,4 +1,5 @@
 using Aegis;
+using Aegis.Core;
 using Xunit;
 
 namespace Aegis.Tests;
@@ -6,40 +7,95 @@ namespace Aegis.Tests;
 public sealed class OpenAiLanguageModelTests
 {
     [Fact]
-    public async Task MapsQuestionToUserMessageAndConvertsAnswer()
+    public async Task MapsProviderNeutralMessagesAndConvertsFinalAnswer()
     {
-        var client = new FakeOpenAiChatClient("The answer.");
+        var client = new FakeOpenAiChatClient("{\"kind\":\"final_answer\",\"answer\":\"The answer.\"}");
         var model = new OpenAiLanguageModel(client);
 
-        var response = await model.CompleteAsync(new Aegis.Core.LanguageModelRequest("What is Aegis?"));
+        var response = await model.CompleteAsync(CreateRequest(
+            new LanguageModelMessage(LanguageModelMessageRole.System, "System message."),
+            new LanguageModelMessage(LanguageModelMessageRole.User, "Question."),
+            new LanguageModelMessage(LanguageModelMessageRole.Assistant, "Prior decision."),
+            new LanguageModelMessage(LanguageModelMessageRole.Observation, "Evidence.")));
 
-        var message = Assert.Single(client.Messages);
-        Assert.Equal("user", message.Role);
-        Assert.Equal("What is Aegis?", message.Content);
-        Assert.Equal("The answer.", response.Answer);
+        Assert.IsType<FinalAnswerDecision>(response);
+        Assert.Collection(
+            client.Messages,
+            message =>
+            {
+                Assert.Equal(LanguageModelMessageRole.System, message.Role);
+                Assert.Equal("System message.", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal(LanguageModelMessageRole.User, message.Role);
+                Assert.Equal("Question.", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal(LanguageModelMessageRole.Assistant, message.Role);
+                Assert.Equal("Prior decision.", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal(LanguageModelMessageRole.Observation, message.Role);
+                Assert.Equal("Evidence.", message.Content);
+            });
+    }
+
+    [Fact]
+    public async Task ConvertsObservationRequestDecision()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"kind\":\"observation_request\",\"tool_id\":\"windows.system.info\"}"));
+
+        var decision = await model.CompleteAsync(CreateRequest(
+            new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")));
+
+        Assert.Equal(
+            new ObservationRequestDecision("windows.system.info"),
+            decision);
     }
 
     [Fact]
     public async Task ConvertsProviderFailureToLanguageModelException()
     {
-        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(exception: new InvalidOperationException("provider failure")));
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            exception: new InvalidOperationException("provider failure")));
 
-        var exception = await Assert.ThrowsAsync<Aegis.Core.LanguageModelException>(() =>
-            model.CompleteAsync(new Aegis.Core.LanguageModelRequest("Question")));
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
 
         Assert.Equal("The language model request failed.", exception.Message);
         Assert.IsType<InvalidOperationException>(exception.InnerException);
     }
 
-    [Fact]
-    public async Task RejectsMalformedEmptyProviderResponse()
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("[{}]")]
+    [InlineData("{\"kind\":\"unknown\",\"answer\":\"text\"}")]
+    [InlineData("{\"kind\":\"final_answer\",\"answer\":\"text\",\"arguments\":{}}")]
+    [InlineData("```json\n{\"kind\":\"final_answer\",\"answer\":\"text\"}\n```")]
+    public async Task RejectsMalformedProviderDecisions(string content)
     {
-        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(string.Empty));
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(content));
 
-        var exception = await Assert.ThrowsAsync<Aegis.Core.LanguageModelException>(() =>
-            model.CompleteAsync(new Aegis.Core.LanguageModelRequest("Question")));
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
 
-        Assert.Equal("The language model returned an empty answer.", exception.Message);
+        Assert.Equal("The language model returned an invalid decision.", exception.Message);
+    }
+
+    [Fact]
+    public async Task RejectsDuplicateProviderDecisionProperties()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"kind\":\"final_answer\",\"answer\":\"one\",\"answer\":\"two\"}"));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
+
+        Assert.Equal("The language model returned an invalid decision.", exception.Message);
     }
 
     [Fact]
@@ -47,11 +103,17 @@ public sealed class OpenAiLanguageModelTests
     {
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(cancellationToken: cancellation.Token));
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            cancellationToken: cancellation.Token));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            model.CompleteAsync(new Aegis.Core.LanguageModelRequest("Question"), cancellation.Token));
+            model.CompleteAsync(
+                CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")),
+                cancellation.Token));
     }
+
+    private static LanguageModelRequest CreateRequest(params LanguageModelMessage[] messages) =>
+        new LanguageModelRequest(messages);
 
     private sealed class FakeOpenAiChatClient : IOpenAiChatClient
     {

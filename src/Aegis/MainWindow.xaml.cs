@@ -39,6 +39,11 @@ public sealed partial class MainWindow : Window
             _logger.LogWarning("Investigation request failed.");
             StatusTextBlock.Text = "Investigation is unavailable right now.";
         }
+        catch (AgentRuntimeException)
+        {
+            _logger.LogWarning("Investigation request failed.");
+            StatusTextBlock.Text = "Investigation is unavailable right now.";
+        }
         catch (Exception exception)
         {
             _logger.LogError(exception, "Unexpected investigation failure.");

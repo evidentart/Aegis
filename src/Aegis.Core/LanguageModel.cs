@@ -2,14 +2,25 @@ namespace Aegis.Core;
 
 public interface ILanguageModel
 {
-    Task<LanguageModelResponse> CompleteAsync(
+    Task<AgentDecision> CompleteAsync(
         LanguageModelRequest request,
         CancellationToken cancellationToken = default);
 }
 
-public sealed record LanguageModelRequest(string Question);
+public enum LanguageModelMessageRole
+{
+    System,
+    User,
+    Assistant,
+    Observation
+}
 
-public sealed record LanguageModelResponse(string Answer);
+public sealed record LanguageModelMessage(
+    LanguageModelMessageRole Role,
+    string Content);
+
+public sealed record LanguageModelRequest(
+    IReadOnlyList<LanguageModelMessage> Messages);
 
 public sealed class LanguageModelException : Exception
 {
@@ -21,14 +32,14 @@ public sealed class LanguageModelException : Exception
 
 public sealed class InvestigationService
 {
-    private readonly ILanguageModel _languageModel;
+    private readonly AgentRuntime _agentRuntime;
 
-    public InvestigationService(ILanguageModel languageModel)
+    public InvestigationService(AgentRuntime agentRuntime)
     {
-        _languageModel = languageModel;
+        _agentRuntime = agentRuntime;
     }
 
-    public Task<LanguageModelResponse> InvestigateAsync(
+    public Task<AgentRunResult> InvestigateAsync(
         string question,
         CancellationToken cancellationToken = default)
     {
@@ -37,8 +48,8 @@ public sealed class InvestigationService
             throw new ArgumentException("A question is required.", nameof(question));
         }
 
-        return _languageModel.CompleteAsync(
-            new LanguageModelRequest(question.Trim()),
+        return _agentRuntime.RunAsync(
+            question.Trim(),
             cancellationToken);
     }
 }

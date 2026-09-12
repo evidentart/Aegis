@@ -71,6 +71,8 @@ public sealed class ObservationRuntime
         _logDiagnostic = logDiagnostic ?? (_ => { });
     }
 
+    public IReadOnlyList<ObservationToolDescriptor> Descriptors => _registry.Descriptors;
+
     public async Task<ObservationResult> ObserveAsync(
         ObservationRequest request,
         CancellationToken cancellationToken = default)

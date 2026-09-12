@@ -28,16 +28,20 @@ public partial class App : Application
         var apiKey = Environment.GetEnvironmentVariable("AEGIS_OPENAI_API_KEY");
         var model = Environment.GetEnvironmentVariable("AEGIS_OPENAI_MODEL");
         model = string.IsNullOrWhiteSpace(model) ? DefaultOpenAiModel : model.Trim();
+        ILanguageModel languageModel;
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             _logger.LogWarning("AEGIS_OPENAI_API_KEY is not configured; investigations will be unavailable.");
-            _investigationService = new InvestigationService(new UnavailableLanguageModel());
+            languageModel = new UnavailableLanguageModel();
         }
         else
         {
-            _investigationService = new InvestigationService(
-                new OpenAiLanguageModel(new SdkOpenAiChatClient(new ChatClient(model, apiKey))));
+            languageModel = new OpenAiLanguageModel(
+                new SdkOpenAiChatClient(new ChatClient(model, apiKey)));
         }
+
+        _investigationService = new InvestigationService(
+            new AgentRuntime(languageModel, _observationRuntime));
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -49,7 +53,7 @@ public partial class App : Application
 
     private sealed class UnavailableLanguageModel : Aegis.Core.ILanguageModel
     {
-        public Task<Aegis.Core.LanguageModelResponse> CompleteAsync(
+        public Task<Aegis.Core.AgentDecision> CompleteAsync(
             Aegis.Core.LanguageModelRequest request,
             CancellationToken cancellationToken = default) =>
             throw new Aegis.Core.LanguageModelException("Configure AEGIS_OPENAI_API_KEY for local development.");

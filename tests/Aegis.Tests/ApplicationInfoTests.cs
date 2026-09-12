@@ -16,7 +16,7 @@ public sealed class ApplicationInfoTests
     public async Task InvestigationServiceTrimsQuestionAndReturnsAnswer()
     {
         var model = new FakeLanguageModel();
-        var service = new InvestigationService(model);
+        var service = CreateService(model);
 
         var response = await service.InvestigateAsync("  What is Aegis?  ");
 
@@ -27,17 +27,22 @@ public sealed class ApplicationInfoTests
     [Fact]
     public async Task InvestigationServiceRejectsEmptyQuestion()
     {
-        var service = new InvestigationService(new FakeLanguageModel());
+        var service = CreateService(new FakeLanguageModel());
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.InvestigateAsync("  "));
     }
+
+    private static InvestigationService CreateService(ILanguageModel model) =>
+        new(new AgentRuntime(
+            model,
+            new ObservationRuntime(new ObservationRegistry([]))));
 
     [Fact]
     public async Task InvestigationServiceForwardsCancellationToLanguageModel()
     {
         using var cancellation = new CancellationTokenSource();
         var model = new FakeLanguageModel();
-        var service = new InvestigationService(model);
+        var service = CreateService(model);
 
         await service.InvestigateAsync("Question", cancellation.Token);
 
@@ -48,7 +53,7 @@ public sealed class ApplicationInfoTests
     public async Task InvestigationServiceUsesLanguageModelContract()
     {
         ILanguageModel model = new FakeLanguageModel();
-        var service = new InvestigationService(model);
+        var service = CreateService(model);
 
         var response = await service.InvestigateAsync("Question");
 
@@ -61,13 +66,15 @@ public sealed class ApplicationInfoTests
 
         public CancellationToken LastCancellationToken { get; private set; }
 
-        public Task<LanguageModelResponse> CompleteAsync(
+        public Task<AgentDecision> CompleteAsync(
             LanguageModelRequest request,
             CancellationToken cancellationToken = default)
         {
-            LastQuestion = request.Question;
+            LastQuestion = Assert.Single(request.Messages, message =>
+                    message.Role == LanguageModelMessageRole.User)
+                .Content;
             LastCancellationToken = cancellationToken;
-            return Task.FromResult(new LanguageModelResponse("Aegis is ready."));
+            return Task.FromResult<AgentDecision>(new FinalAnswerDecision("Aegis is ready."));
         }
     }
 }
