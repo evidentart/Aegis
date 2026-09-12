@@ -16,5 +16,6 @@
     <ProjectReference Include="..\..\src\Aegis.Core\Aegis.Core.csproj" />
     <PackageReference Include="OpenAI" Version="2.12.0" />
     <Compile Include="..\..\src\Aegis\OpenAiLanguageModel.cs" Link="OpenAiLanguageModel.cs" />
+    <Compile Include="..\..\src\Aegis\WindowsSystemInfoObservationTool.cs" Link="WindowsSystemInfoObservationTool.cs" />
   </ItemGroup>
 </Project>

@@ -11,6 +11,7 @@ public partial class App : Application
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<App> _logger;
     private readonly InvestigationService _investigationService;
+    private readonly ObservationRuntime _observationRuntime;
     private Window? _window;
 
     public App()
@@ -18,6 +19,11 @@ public partial class App : Application
         InitializeComponent();
         _loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
         _logger = _loggerFactory.CreateLogger<App>();
+        var observationRegistry = new ObservationRegistry(
+            [new WindowsSystemInfoObservationTool()]);
+        _observationRuntime = new ObservationRuntime(
+            observationRegistry,
+            exception => _logger.LogError(exception, "Observation tool execution failed."));
 
         var apiKey = Environment.GetEnvironmentVariable("AEGIS_OPENAI_API_KEY");
         var model = Environment.GetEnvironmentVariable("AEGIS_OPENAI_MODEL");
