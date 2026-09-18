@@ -1,0 +1,1033 @@
+using System.Globalization;
+using Aegis.Core;
+using Microsoft.Data.Sqlite;
+
+namespace Aegis.Persistence;
+
+public sealed class SqliteDatabase
+{
+    private readonly string _connectionString;
+    private readonly object _initializationLock = new();
+    private bool _initialized;
+
+    public SqliteDatabase(string databasePath)
+    {
+        if (string.IsNullOrWhiteSpace(databasePath))
+        {
+            throw new ArgumentException("A database path is required.", nameof(databasePath));
+        }
+
+        DatabasePath = Path.GetFullPath(databasePath);
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared
+        }.ToString();
+    }
+
+    public string DatabasePath { get; }
+
+    public void Initialize()
+    {
+        if (_initialized)
+        {
+            return;
+        }
+
+        lock (_initializationLock)
+        {
+            if (_initialized)
+            {
+                return;
+            }
+
+            var directory = Path.GetDirectoryName(DatabasePath);
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                throw new InvalidOperationException("The database path must include a directory.");
+            }
+
+            Directory.CreateDirectory(directory);
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            ExecuteNonQuery(connection, transaction, "PRAGMA foreign_keys = ON;");
+            ExecuteNonQuery(
+                connection,
+                transaction,
+                "CREATE TABLE IF NOT EXISTS SchemaVersions (Version INTEGER NOT NULL);");
+
+            var version = Convert.ToInt32(
+                ExecuteScalar(connection, transaction, "SELECT COALESCE(MAX(Version), 0) FROM SchemaVersions"),
+                CultureInfo.InvariantCulture);
+            if (version > 2)
+            {
+                throw new InvalidOperationException($"The database schema version '{version}' is newer than this application supports.");
+            }
+
+            if (version < 1)
+            {
+                ExecuteNonQuery(connection, transaction, """
+                    CREATE TABLE Investigations (
+                        InvestigationId TEXT PRIMARY KEY NOT NULL,
+                        Question TEXT NOT NULL,
+                        Objective TEXT NOT NULL,
+                        CreatedAtUtc TEXT NOT NULL,
+                        StartedAtUtc TEXT NULL,
+                        CompletedAtUtc TEXT NULL,
+                        LifecycleStatus INTEGER NOT NULL,
+                        FinalAnswer TEXT NULL,
+                        FailureCode TEXT NULL,
+                        FailureMessage TEXT NULL
+                    );
+                    CREATE TABLE Plans (
+                        InvestigationId TEXT NOT NULL,
+                        PlanSequence INTEGER NOT NULL,
+                        AcceptedAtUtc TEXT NOT NULL,
+                        Objective TEXT NOT NULL,
+                        PRIMARY KEY (InvestigationId, PlanSequence),
+                        FOREIGN KEY (InvestigationId) REFERENCES Investigations(InvestigationId)
+                    );
+                    CREATE TABLE PlanSteps (
+                        InvestigationId TEXT NOT NULL,
+                        PlanSequence INTEGER NOT NULL,
+                        StepId TEXT NOT NULL,
+                        Ordinal INTEGER NOT NULL,
+                        ToolId TEXT NOT NULL,
+                        Status INTEGER NOT NULL,
+                        PRIMARY KEY (InvestigationId, PlanSequence, StepId),
+                        FOREIGN KEY (InvestigationId, PlanSequence)
+                            REFERENCES Plans(InvestigationId, PlanSequence)
+                    );
+                    CREATE TABLE StepExecutions (
+                        ExecutionId INTEGER PRIMARY KEY AUTOINCREMENT,
+                        InvestigationId TEXT NOT NULL,
+                        PlanSequence INTEGER NOT NULL,
+                        StepId TEXT NOT NULL,
+                        ToolId TEXT NOT NULL,
+                        RequestId TEXT NOT NULL,
+                        RequestedAtUtc TEXT NOT NULL,
+                        ObservedAtUtc TEXT NULL,
+                        ToolContractVersion TEXT NOT NULL,
+                        Status INTEGER NOT NULL,
+                        ObservationId INTEGER NULL,
+                        UNIQUE (InvestigationId, PlanSequence, StepId),
+                        FOREIGN KEY (InvestigationId, PlanSequence, StepId)
+                            REFERENCES PlanSteps(InvestigationId, PlanSequence, StepId),
+                        FOREIGN KEY (ObservationId) REFERENCES Observations(ObservationId)
+                    );
+                    CREATE TABLE Observations (
+                        ObservationId INTEGER PRIMARY KEY AUTOINCREMENT,
+                        InvestigationId TEXT NOT NULL,
+                        PlanSequence INTEGER NOT NULL,
+                        StepId TEXT NOT NULL,
+                        RequestId TEXT NOT NULL,
+                        ToolId TEXT NOT NULL,
+                        ObservedAtUtc TEXT NOT NULL,
+                        Status INTEGER NOT NULL,
+                        FailureCode TEXT NULL,
+                        FailureMessage TEXT NULL,
+                        Platform TEXT NULL,
+                        OsVersion TEXT NULL,
+                        Build INTEGER NULL,
+                        Architecture TEXT NULL,
+                        FOREIGN KEY (InvestigationId, PlanSequence, StepId)
+                            REFERENCES PlanSteps(InvestigationId, PlanSequence, StepId)
+                    );
+                    CREATE TABLE Baselines (
+                        BaselineId TEXT PRIMARY KEY NOT NULL,
+                        SourceInvestigationId TEXT NOT NULL,
+                        SourceStepId TEXT NOT NULL,
+                        ToolId TEXT NOT NULL,
+                        CreatedAtUtc TEXT NOT NULL,
+                        RequestId TEXT NOT NULL,
+                        ObservedAtUtc TEXT NOT NULL,
+                        Platform TEXT NOT NULL,
+                        OsVersion TEXT NOT NULL,
+                        Build INTEGER NULL,
+                        Architecture TEXT NOT NULL,
+                        FOREIGN KEY (SourceInvestigationId) REFERENCES Investigations(InvestigationId)
+                    );
+                    CREATE INDEX IX_Investigations_CreatedAtUtc
+                        ON Investigations(CreatedAtUtc DESC);
+                    CREATE INDEX IX_StepExecutions_Investigation
+                        ON StepExecutions(InvestigationId, PlanSequence, ExecutionId);
+                    """);
+                ExecuteNonQuery(connection, transaction, "INSERT INTO SchemaVersions (Version) VALUES (1);");
+            }
+
+            if (version < 2)
+            {
+                ExecuteNonQuery(connection, transaction, """
+                    DROP INDEX IF EXISTS IX_StepExecutions_Investigation;
+                    ALTER TABLE StepExecutions RENAME TO StepExecutions_v1;
+                    CREATE TABLE StepExecutions (
+                        ExecutionId INTEGER PRIMARY KEY AUTOINCREMENT,
+                        InvestigationId TEXT NOT NULL,
+                        PlanSequence INTEGER NOT NULL,
+                        StepId TEXT NOT NULL,
+                        ToolId TEXT NOT NULL,
+                        RequestId TEXT NOT NULL,
+                        RequestedAtUtc TEXT NOT NULL,
+                        ObservedAtUtc TEXT NULL,
+                        ToolContractVersion TEXT NOT NULL,
+                        Status INTEGER NOT NULL,
+                        ObservationId INTEGER NULL,
+                        UNIQUE (InvestigationId, PlanSequence, StepId),
+                        FOREIGN KEY (InvestigationId, PlanSequence, StepId)
+                            REFERENCES PlanSteps(InvestigationId, PlanSequence, StepId),
+                        FOREIGN KEY (ObservationId) REFERENCES Observations(ObservationId)
+                    );
+                    INSERT INTO StepExecutions
+                        (ExecutionId, InvestigationId, PlanSequence, StepId, ToolId, RequestId,
+                         RequestedAtUtc, ObservedAtUtc, ToolContractVersion, Status, ObservationId)
+                    SELECT ExecutionId, InvestigationId, PlanSequence, StepId, ToolId, RequestId,
+                           RequestedAtUtc, ObservedAtUtc, ToolContractVersion, Status, ObservationId
+                    FROM StepExecutions_v1;
+                    DROP TABLE StepExecutions_v1;
+                    CREATE INDEX IX_StepExecutions_Investigation
+                        ON StepExecutions(InvestigationId, PlanSequence, ExecutionId);
+                    INSERT INTO SchemaVersions (Version) VALUES (2);
+                    """);
+            }
+
+            transaction.Commit();
+            _initialized = true;
+        }
+    }
+
+    internal SqliteConnection OpenConnection()
+    {
+        var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        ExecuteNonQuery(connection, null, "PRAGMA foreign_keys = ON;");
+        return connection;
+    }
+
+    internal static void AddParameter(SqliteCommand command, string name, object? value) =>
+        command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+
+    internal static void ExecuteNonQuery(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string commandText)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = commandText;
+        command.ExecuteNonQuery();
+    }
+
+    internal static object? ExecuteScalar(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string commandText)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = commandText;
+        return command.ExecuteScalar();
+    }
+}
+
+public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBaselineStore
+{
+    private const string DateFormat = "O";
+    private readonly SqliteDatabase _database;
+
+    public SqliteInvestigationStore(SqliteDatabase database)
+    {
+        _database = database ?? throw new ArgumentNullException(nameof(database));
+    }
+
+    public void Initialize() => _database.Initialize();
+
+    public Task CreateAsync(
+        Investigation investigation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(investigation);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO Investigations
+                (InvestigationId, Question, Objective, CreatedAtUtc, LifecycleStatus)
+            VALUES ($id, $question, $objective, $created, $status);
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigation.InvestigationId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$question", investigation.Question);
+        SqliteDatabase.AddParameter(command, "$objective", investigation.Objective);
+        SqliteDatabase.AddParameter(command, "$created", FormatDate(investigation.CreatedAtUtc));
+        SqliteDatabase.AddParameter(command, "$status", (int)InvestigationLifecycleStatus.Created);
+        command.ExecuteNonQuery();
+        return Task.CompletedTask;
+    }
+
+    public Task MarkRunningAsync(
+        Guid investigationId,
+        DateTimeOffset startedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Investigations
+            SET StartedAtUtc = $started, LifecycleStatus = $running
+            WHERE InvestigationId = $id AND LifecycleStatus = $created;
+            """;
+        SqliteDatabase.AddParameter(command, "$started", FormatDate(startedAtUtc));
+        SqliteDatabase.AddParameter(command, "$running", (int)InvestigationLifecycleStatus.Running);
+        SqliteDatabase.AddParameter(command, "$created", (int)InvestigationLifecycleStatus.Created);
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        if (command.ExecuteNonQuery() != 1)
+        {
+            throw new InvestigationPersistenceException("The investigation could not be marked as running.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task AppendPlanAsync(
+        Guid investigationId,
+        InvestigationPlanHistoryEntry plan,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO Plans (InvestigationId, PlanSequence, AcceptedAtUtc, Objective)
+                SELECT $id, $sequence, $accepted, $objective
+                WHERE EXISTS (
+                    SELECT 1 FROM Investigations
+                    WHERE InvestigationId = $id AND LifecycleStatus = $running);
+                """;
+            SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$sequence", plan.PlanSequence);
+            SqliteDatabase.AddParameter(command, "$accepted", FormatDate(plan.AcceptedAtUtc));
+            SqliteDatabase.AddParameter(command, "$objective", plan.Plan.Objective);
+            SqliteDatabase.AddParameter(command, "$running", (int)InvestigationLifecycleStatus.Running);
+            if (command.ExecuteNonQuery() != 1)
+            {
+                throw new InvestigationPersistenceException(
+                    "Plans can only be appended while the investigation is running.");
+            }
+        }
+
+        for (var index = 0; index < plan.Plan.Steps.Count; index++)
+        {
+            var step = plan.Plan.Steps[index];
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO PlanSteps
+                    (InvestigationId, PlanSequence, StepId, Ordinal, ToolId, Status)
+                VALUES ($id, $sequence, $step, $ordinal, $tool, $status);
+                """;
+            SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$sequence", plan.PlanSequence);
+            SqliteDatabase.AddParameter(command, "$step", step.StepId);
+            SqliteDatabase.AddParameter(command, "$ordinal", index);
+            SqliteDatabase.AddParameter(command, "$tool", step.ToolId);
+            SqliteDatabase.AddParameter(command, "$status", (int)step.Status);
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return Task.CompletedTask;
+    }
+
+    public Task AppendStepExecutionAsync(
+        Guid investigationId,
+        InvestigationStepExecution execution,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        if (execution.Result is { } result &&
+            (result.RequestId != execution.RequestId ||
+             !string.Equals(result.ToolId, execution.ToolId, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException("The execution and observation result identities must match.");
+        }
+
+        ValidateExecutionResult(execution);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        EnsureInvestigationRunning(connection, transaction, investigationId);
+        var planStep = ReadPlanStep(connection, transaction, investigationId, execution);
+        if (!string.Equals(planStep.ToolId, execution.ToolId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The execution ToolId does not match the persisted plan step.");
+        }
+
+        if (planStep.Status != InvestigationStepStatus.Pending)
+        {
+            throw new InvestigationPersistenceException("The investigation step is no longer pending.");
+        }
+
+        long? observationId = null;
+
+        if (execution.Result is not null)
+        {
+            observationId = InsertObservation(connection, transaction, investigationId, execution);
+        }
+
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO StepExecutions
+                    (InvestigationId, PlanSequence, StepId, ToolId, RequestId,
+                     RequestedAtUtc, ObservedAtUtc, ToolContractVersion, Status, ObservationId)
+                VALUES ($id, $sequence, $step, $tool, $request, $requested,
+                        $observed, $version, $status, $observation);
+                """;
+            SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$sequence", execution.PlanSequence);
+            SqliteDatabase.AddParameter(command, "$step", execution.StepId);
+            SqliteDatabase.AddParameter(command, "$tool", execution.ToolId);
+            SqliteDatabase.AddParameter(command, "$request", execution.RequestId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$requested", FormatDate(execution.RequestedAtUtc));
+            SqliteDatabase.AddParameter(command, "$observed", FormatDateOrNull(execution.ObservedAtUtc));
+            SqliteDatabase.AddParameter(command, "$version", execution.ToolContractVersion);
+            SqliteDatabase.AddParameter(command, "$status", (int)execution.Status);
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            command.ExecuteNonQuery();
+        }
+
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE PlanSteps
+                SET Status = $status
+                WHERE InvestigationId = $id AND PlanSequence = $sequence AND StepId = $step
+                  AND ToolId = $tool
+                  AND Status = $pending
+                  AND EXISTS (
+                      SELECT 1 FROM Investigations
+                      WHERE InvestigationId = $id AND LifecycleStatus = $running);
+                """;
+            SqliteDatabase.AddParameter(command, "$status", (int)execution.Status);
+            SqliteDatabase.AddParameter(command, "$pending", (int)InvestigationStepStatus.Pending);
+            SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$sequence", execution.PlanSequence);
+            SqliteDatabase.AddParameter(command, "$step", execution.StepId);
+            SqliteDatabase.AddParameter(command, "$tool", execution.ToolId);
+            SqliteDatabase.AddParameter(command, "$running", (int)InvestigationLifecycleStatus.Running);
+            if (command.ExecuteNonQuery() != 1)
+            {
+                throw new InvestigationPersistenceException("The investigation step could not be updated.");
+            }
+        }
+
+        transaction.Commit();
+        return Task.CompletedTask;
+    }
+
+    public Task MarkStepsSkippedAsync(
+        Guid investigationId,
+        int planSequence,
+        IReadOnlyList<string> stepIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stepIds);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        EnsureInvestigationRunning(connection, transaction, investigationId);
+        foreach (var stepId in stepIds)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE PlanSteps
+                SET Status = $skipped
+                WHERE InvestigationId = $id AND PlanSequence = $sequence
+                  AND StepId = $step AND Status = $pending
+                  AND EXISTS (
+                      SELECT 1 FROM Investigations
+                      WHERE InvestigationId = $id AND LifecycleStatus = $running);
+                """;
+            SqliteDatabase.AddParameter(command, "$skipped", (int)InvestigationStepStatus.Skipped);
+            SqliteDatabase.AddParameter(command, "$pending", (int)InvestigationStepStatus.Pending);
+            SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$sequence", planSequence);
+            SqliteDatabase.AddParameter(command, "$step", stepId);
+            SqliteDatabase.AddParameter(command, "$running", (int)InvestigationLifecycleStatus.Running);
+            if (command.ExecuteNonQuery() != 1)
+            {
+                throw new InvestigationPersistenceException("An unreached investigation step could not be marked as skipped.");
+            }
+        }
+
+        transaction.Commit();
+        return Task.CompletedTask;
+    }
+
+    public Task<bool> CommitTerminalOutcomeAsync(
+        Guid investigationId,
+        InvestigationLifecycleStatus terminalStatus,
+        InvestigationOutcome outcome,
+        DateTimeOffset completedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (terminalStatus is not (InvestigationLifecycleStatus.Completed or
+            InvestigationLifecycleStatus.Failed or InvestigationLifecycleStatus.Cancelled))
+        {
+            throw new ArgumentException("A terminal lifecycle status is required.", nameof(terminalStatus));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE Investigations
+            SET CompletedAtUtc = $completed,
+                LifecycleStatus = $status,
+                FinalAnswer = $answer,
+                FailureCode = $failureCode,
+                FailureMessage = $failureMessage
+            WHERE InvestigationId = $id AND LifecycleStatus = $running;
+            """;
+        SqliteDatabase.AddParameter(command, "$completed", FormatDate(completedAtUtc));
+        SqliteDatabase.AddParameter(command, "$status", (int)terminalStatus);
+        SqliteDatabase.AddParameter(command, "$answer", outcome.FinalAnswer);
+        SqliteDatabase.AddParameter(command, "$failureCode", outcome.FailureCode);
+        SqliteDatabase.AddParameter(command, "$failureMessage", outcome.FailureMessage);
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$running", (int)InvestigationLifecycleStatus.Running);
+        var committed = command.ExecuteNonQuery() == 1;
+        transaction.Commit();
+        return Task.FromResult(committed);
+    }
+
+    public Task<IReadOnlyList<InvestigationSummary>> ListAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+        var summaries = new List<InvestigationSummary>();
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT InvestigationId, Question, CreatedAtUtc, CompletedAtUtc,
+                   LifecycleStatus, FinalAnswer
+            FROM Investigations
+            ORDER BY CreatedAtUtc DESC;
+            """;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            summaries.Add(new InvestigationSummary(
+                ParseGuid(reader.GetString(0)),
+                reader.GetString(1),
+                ParseDate(reader.GetString(2)),
+                reader.IsDBNull(3) ? null : ParseDate(reader.GetString(3)),
+                (InvestigationLifecycleStatus)reader.GetInt32(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
+        }
+
+        return Task.FromResult<IReadOnlyList<InvestigationSummary>>(summaries);
+    }
+
+    public Task<InvestigationDetails?> GetAsync(
+        Guid investigationId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+        using var connection = _database.OpenConnection();
+        Investigation? investigation;
+        string question;
+        string objective;
+        DateTimeOffset createdAtUtc;
+        DateTimeOffset? startedAtUtc;
+        DateTimeOffset? completedAtUtc;
+        InvestigationLifecycleStatus lifecycleStatus;
+        InvestigationOutcome? outcome;
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT Question, Objective, CreatedAtUtc, StartedAtUtc, CompletedAtUtc,
+                       LifecycleStatus, FinalAnswer, FailureCode, FailureMessage
+                FROM Investigations WHERE InvestigationId = $id;
+                """;
+            SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                return Task.FromResult<InvestigationDetails?>(null);
+            }
+
+            question = reader.GetString(0);
+            objective = reader.GetString(1);
+            createdAtUtc = ParseDate(reader.GetString(2));
+            startedAtUtc = reader.IsDBNull(3) ? null : ParseDate(reader.GetString(3));
+            completedAtUtc = reader.IsDBNull(4) ? null : ParseDate(reader.GetString(4));
+            lifecycleStatus = (InvestigationLifecycleStatus)reader.GetInt32(5);
+            outcome = CreateOutcome(reader, 6, 7, 8);
+        }
+
+        investigation = new Investigation(
+            investigationId,
+            question,
+            objective,
+            createdAtUtc,
+            startedAtUtc,
+            completedAtUtc,
+            lifecycleStatus,
+            outcome,
+            ReadPlans(connection, investigationId),
+            ReadExecutions(connection, investigationId));
+
+        return Task.FromResult<InvestigationDetails?>(new InvestigationDetails(investigation));
+    }
+
+    public Task CreateAsync(
+        Baseline baseline,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(baseline);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        if (!string.Equals(baseline.ToolId, WindowsSystemInfoObservationTool.ToolId, StringComparison.Ordinal) ||
+            baseline.Observation.Status != ObservationStatus.Succeeded ||
+            baseline.Observation.Data is not WindowsSystemInfo data)
+        {
+            throw new InvalidOperationException("Only approved Windows system information can be baselined.");
+        }
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var sourceCommand = connection.CreateCommand())
+        {
+            sourceCommand.Transaction = transaction;
+            sourceCommand.CommandText = """
+                SELECT observation.RequestId, observation.ToolId, observation.ObservedAtUtc,
+                       observation.Status, observation.FailureCode, observation.FailureMessage,
+                       observation.Platform, observation.OsVersion, observation.Build,
+                       observation.Architecture
+                FROM Investigations investigation
+                INNER JOIN StepExecutions execution
+                    ON execution.InvestigationId = investigation.InvestigationId
+                INNER JOIN PlanSteps step
+                    ON step.InvestigationId = execution.InvestigationId
+                   AND step.PlanSequence = execution.PlanSequence
+                   AND step.StepId = execution.StepId
+                INNER JOIN Observations observation
+                    ON observation.ObservationId = execution.ObservationId
+                WHERE investigation.InvestigationId = $investigation
+                  AND investigation.LifecycleStatus = $completedInvestigation
+                  AND execution.StepId = $sourceStep
+                  AND execution.RequestId = $request
+                  AND execution.ToolId = $tool
+                  AND execution.Status = $completedExecution
+                  AND step.ToolId = execution.ToolId
+                  AND step.Status = $completedStep
+                  AND observation.InvestigationId = execution.InvestigationId
+                  AND observation.PlanSequence = execution.PlanSequence
+                  AND observation.StepId = execution.StepId
+                  AND observation.RequestId = execution.RequestId
+                  AND observation.ToolId = execution.ToolId
+                  AND observation.RequestId = $request
+                  AND observation.ToolId = $tool
+                ORDER BY execution.ExecutionId;
+                """;
+            SqliteDatabase.AddParameter(sourceCommand, "$investigation", baseline.SourceInvestigationId.ToString("D"));
+            SqliteDatabase.AddParameter(sourceCommand, "$sourceStep", baseline.SourceStepId);
+            SqliteDatabase.AddParameter(sourceCommand, "$request", baseline.Observation.RequestId.ToString("D"));
+            SqliteDatabase.AddParameter(sourceCommand, "$tool", baseline.ToolId);
+            SqliteDatabase.AddParameter(sourceCommand, "$completedInvestigation", (int)InvestigationLifecycleStatus.Completed);
+            SqliteDatabase.AddParameter(sourceCommand, "$completedExecution", (int)InvestigationStepStatus.Completed);
+            SqliteDatabase.AddParameter(sourceCommand, "$completedStep", (int)InvestigationStepStatus.Completed);
+            using var reader = sourceCommand.ExecuteReader();
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException(
+                    "The baseline source must identify one completed persisted observation with matching data.");
+            }
+
+            var matchesBaselineObservation = MatchesBaselineObservation(baseline.Observation, reader);
+            if (reader.Read() || !matchesBaselineObservation)
+            {
+                throw new InvalidOperationException(
+                    "The baseline source must identify one completed persisted observation with matching data.");
+            }
+        }
+
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO Baselines
+                    (BaselineId, SourceInvestigationId, SourceStepId, ToolId, CreatedAtUtc,
+                     RequestId, ObservedAtUtc, Platform, OsVersion, Build, Architecture)
+                VALUES ($id, $investigation, $step, $tool, $created,
+                        $request, $observed, $platform, $osVersion, $build, $architecture);
+                """;
+            SqliteDatabase.AddParameter(command, "$id", baseline.BaselineId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$investigation", baseline.SourceInvestigationId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$step", baseline.SourceStepId);
+            SqliteDatabase.AddParameter(command, "$tool", baseline.ToolId);
+            SqliteDatabase.AddParameter(command, "$created", FormatDate(baseline.CreatedAtUtc));
+            SqliteDatabase.AddParameter(command, "$request", baseline.Observation.RequestId.ToString("D"));
+            SqliteDatabase.AddParameter(command, "$observed", FormatDate(baseline.Observation.ObservedAtUtc));
+            SqliteDatabase.AddParameter(command, "$platform", data.Platform);
+            SqliteDatabase.AddParameter(command, "$osVersion", data.OsVersion);
+            SqliteDatabase.AddParameter(command, "$build", data.Build);
+            SqliteDatabase.AddParameter(command, "$architecture", data.Architecture);
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return Task.CompletedTask;
+    }
+
+    private static bool MatchesBaselineObservation(
+        ObservationResult expected,
+        SqliteDataReader persisted)
+    {
+        if (expected.RequestId != ParseGuid(persisted.GetString(0)) ||
+            !string.Equals(expected.ToolId, persisted.GetString(1), StringComparison.Ordinal) ||
+            expected.ObservedAtUtc.ToUniversalTime() != ParseDate(persisted.GetString(2)) ||
+            expected.Status != (ObservationStatus)persisted.GetInt32(3))
+        {
+            return false;
+        }
+
+        var persistedFailureCode = persisted.IsDBNull(4) ? null : persisted.GetString(4);
+        var persistedFailureMessage = persisted.IsDBNull(5) ? null : persisted.GetString(5);
+        if (!string.Equals(expected.Failure?.Code, persistedFailureCode, StringComparison.Ordinal) ||
+            !string.Equals(expected.Failure?.Message, persistedFailureMessage, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (expected.Data is not WindowsSystemInfo expectedData ||
+            persisted.IsDBNull(6) ||
+            persisted.IsDBNull(7) ||
+            persisted.IsDBNull(9))
+        {
+            return false;
+        }
+
+        return string.Equals(expectedData.Platform, persisted.GetString(6), StringComparison.Ordinal) &&
+               string.Equals(expectedData.OsVersion, persisted.GetString(7), StringComparison.Ordinal) &&
+               expectedData.Build == (persisted.IsDBNull(8) ? null : persisted.GetInt32(8)) &&
+               string.Equals(expectedData.Architecture, persisted.GetString(9), StringComparison.Ordinal);
+    }
+
+    public Task<IReadOnlyList<BaselineSummary>> ListBaselinesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+        var baselines = new List<BaselineSummary>();
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT BaselineId, SourceInvestigationId, ToolId, CreatedAtUtc,
+                   Platform, OsVersion, Build, Architecture
+            FROM Baselines ORDER BY CreatedAtUtc DESC;
+            """;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            baselines.Add(new BaselineSummary(
+                ParseGuid(reader.GetString(0)),
+                ParseGuid(reader.GetString(1)),
+                reader.GetString(2),
+                ParseDate(reader.GetString(3)),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                reader.GetString(7)));
+        }
+
+        return Task.FromResult<IReadOnlyList<BaselineSummary>>(baselines);
+    }
+
+    private long InsertObservation(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid investigationId,
+        InvestigationStepExecution execution)
+    {
+        var result = execution.Result!;
+        if (result.Data is not null and not WindowsSystemInfo)
+        {
+            throw new InvalidOperationException("The observation data type is not supported by persistence.");
+        }
+
+        var data = result.Data as WindowsSystemInfo;
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO Observations
+                (InvestigationId, PlanSequence, StepId, RequestId, ToolId, ObservedAtUtc,
+                 Status, FailureCode, FailureMessage, Platform, OsVersion, Build, Architecture)
+            VALUES ($id, $sequence, $step, $request, $tool, $observed,
+                    $status, $failureCode, $failureMessage, $platform, $osVersion, $build, $architecture);
+            SELECT last_insert_rowid();
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$sequence", execution.PlanSequence);
+        SqliteDatabase.AddParameter(command, "$step", execution.StepId);
+        SqliteDatabase.AddParameter(command, "$request", result.RequestId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$tool", result.ToolId);
+        SqliteDatabase.AddParameter(command, "$observed", FormatDate(result.ObservedAtUtc));
+        SqliteDatabase.AddParameter(command, "$status", (int)result.Status);
+        SqliteDatabase.AddParameter(command, "$failureCode", result.Failure?.Code);
+        SqliteDatabase.AddParameter(command, "$failureMessage", result.Failure?.Message);
+        SqliteDatabase.AddParameter(command, "$platform", data?.Platform);
+        SqliteDatabase.AddParameter(command, "$osVersion", data?.OsVersion);
+        SqliteDatabase.AddParameter(command, "$build", data?.Build);
+        SqliteDatabase.AddParameter(command, "$architecture", data?.Architecture);
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static IReadOnlyList<InvestigationPlanHistoryEntry> ReadPlans(
+        SqliteConnection connection,
+        Guid investigationId)
+    {
+        var planHeaders = new List<(int Sequence, DateTimeOffset AcceptedAtUtc, string Objective)>();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT PlanSequence, AcceptedAtUtc, Objective
+            FROM Plans WHERE InvestigationId = $id ORDER BY PlanSequence;
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                planHeaders.Add((
+                    reader.GetInt32(0),
+                    ParseDate(reader.GetString(1)),
+                    reader.GetString(2)));
+            }
+        }
+
+        return planHeaders
+            .Select(header => new InvestigationPlanHistoryEntry(
+                header.Sequence,
+                header.AcceptedAtUtc,
+                new InvestigationPlan(
+                    header.Objective,
+                    ReadPlanSteps(connection, investigationId, header.Sequence))))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<InvestigationStep> ReadPlanSteps(
+        SqliteConnection connection,
+        Guid investigationId,
+        int planSequence)
+    {
+        var steps = new List<InvestigationStep>();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT StepId, ToolId, Status
+            FROM PlanSteps
+            WHERE InvestigationId = $id AND PlanSequence = $sequence
+            ORDER BY Ordinal;
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$sequence", planSequence);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            steps.Add(new InvestigationStep(
+                reader.GetString(0),
+                reader.GetString(1),
+                (InvestigationStepStatus)reader.GetInt32(2)));
+        }
+
+        return steps;
+    }
+
+    private static IReadOnlyList<InvestigationStepExecution> ReadExecutions(
+        SqliteConnection connection,
+        Guid investigationId)
+    {
+        var executions = new List<InvestigationStepExecution>();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT se.PlanSequence, se.StepId, se.ToolId, se.RequestId,
+                   se.RequestedAtUtc, se.ObservedAtUtc, se.ToolContractVersion, se.Status,
+                   o.RequestId, o.ToolId, o.ObservedAtUtc, o.Status,
+                   o.FailureCode, o.FailureMessage, o.Platform, o.OsVersion,
+                   o.Build, o.Architecture
+            FROM StepExecutions se
+            LEFT JOIN Observations o ON se.ObservationId = o.ObservationId
+            WHERE se.InvestigationId = $id
+            ORDER BY se.PlanSequence, se.ExecutionId;
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            ObservationResult? result = null;
+            if (!reader.IsDBNull(8))
+            {
+                IObservationData? data = reader.IsDBNull(14)
+                    ? null
+                    : new WindowsSystemInfo(
+                        reader.GetString(14),
+                        reader.GetString(15),
+                        reader.IsDBNull(16) ? null : reader.GetInt32(16),
+                        reader.GetString(17));
+                var failure = reader.IsDBNull(12)
+                    ? null
+                    : new ObservationFailure(reader.GetString(12), reader.GetString(13));
+                result = new ObservationResult(
+                    ParseGuid(reader.GetString(8)),
+                    reader.GetString(9),
+                    ParseDate(reader.GetString(10)),
+                    (ObservationStatus)reader.GetInt32(11),
+                    data,
+                    failure);
+            }
+
+            executions.Add(new InvestigationStepExecution(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                ParseGuid(reader.GetString(3)),
+                ParseDate(reader.GetString(4)),
+                reader.IsDBNull(5) ? null : ParseDate(reader.GetString(5)),
+                reader.GetString(6),
+                (InvestigationStepStatus)reader.GetInt32(7),
+                result));
+        }
+
+        return executions;
+    }
+
+    private static InvestigationOutcome? CreateOutcome(
+        SqliteDataReader reader,
+        int answerIndex,
+        int failureCodeIndex,
+        int failureMessageIndex)
+    {
+        if (reader.IsDBNull(answerIndex) &&
+            reader.IsDBNull(failureCodeIndex) &&
+            reader.IsDBNull(failureMessageIndex))
+        {
+            return null;
+        }
+
+        return new InvestigationOutcome(
+            reader.IsDBNull(answerIndex) ? null : reader.GetString(answerIndex),
+            reader.IsDBNull(failureCodeIndex) ? null : reader.GetString(failureCodeIndex),
+            reader.IsDBNull(failureMessageIndex) ? null : reader.GetString(failureMessageIndex));
+    }
+
+    private static void ValidateExecutionResult(InvestigationStepExecution execution)
+    {
+        if (execution.Result is null)
+        {
+            if (execution.Status is not (InvestigationStepStatus.Failed or InvestigationStepStatus.Cancelled))
+            {
+                throw new InvalidOperationException(
+                    "Only failed or cancelled executions may omit an observation result.");
+            }
+
+            return;
+        }
+
+        var expectedStatus = execution.Result.Status switch
+        {
+            ObservationStatus.Succeeded => InvestigationStepStatus.Completed,
+            ObservationStatus.Failed => InvestigationStepStatus.Failed,
+            _ => throw new InvalidOperationException("The observation result has an unsupported status.")
+        };
+        if (execution.Status != expectedStatus)
+        {
+            throw new InvalidOperationException("The execution status does not match the observation result status.");
+        }
+    }
+
+    private static void EnsureInvestigationRunning(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid investigationId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT LifecycleStatus
+            FROM Investigations
+            WHERE InvestigationId = $id;
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        var value = command.ExecuteScalar();
+        if (value is null || Convert.ToInt32(value, CultureInfo.InvariantCulture) != (int)InvestigationLifecycleStatus.Running)
+        {
+            throw new InvestigationPersistenceException(
+                "Investigation history can only be modified while the investigation is running.");
+        }
+    }
+
+    private static (string ToolId, InvestigationStepStatus Status) ReadPlanStep(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid investigationId,
+        InvestigationStepExecution execution)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT ToolId, Status
+            FROM PlanSteps
+            WHERE InvestigationId = $id AND PlanSequence = $sequence AND StepId = $step;
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$sequence", execution.PlanSequence);
+        SqliteDatabase.AddParameter(command, "$step", execution.StepId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvestigationPersistenceException("The referenced investigation step could not be found.");
+        }
+
+        return (reader.GetString(0), (InvestigationStepStatus)reader.GetInt32(1));
+    }
+
+    private void EnsureInitialized() => _database.Initialize();
+
+    private static string FormatDate(DateTimeOffset value) =>
+        value.ToUniversalTime().ToString(DateFormat, CultureInfo.InvariantCulture);
+
+    private static string? FormatDateOrNull(DateTimeOffset? value) =>
+        value is null ? null : FormatDate(value.Value);
+
+    private static DateTimeOffset ParseDate(string value) =>
+        DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+
+    private static Guid ParseGuid(string value) => Guid.ParseExact(value, "D");
+}

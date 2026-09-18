@@ -15,7 +15,8 @@ public sealed record ObservationToolDescriptor(
     string Id,
     string Name,
     string Description,
-    string ContractVersion = "1.0");
+    string ContractVersion = "1.0",
+    bool BaselineEligible = false);
 
 public interface IObservationData
 {

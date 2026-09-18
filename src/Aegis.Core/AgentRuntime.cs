@@ -7,15 +7,21 @@ public sealed class AgentRuntime
     private readonly IInvestigationPlanner _planner;
     private readonly ILanguageModel _languageModel;
     private readonly ObservationRuntime _observationRuntime;
+    private readonly IInvestigationHistoryStore? _historyStore;
+    private readonly Action<Exception> _logDiagnostic;
 
     public AgentRuntime(
         IInvestigationPlanner planner,
         ILanguageModel languageModel,
-        ObservationRuntime observationRuntime)
+        ObservationRuntime observationRuntime,
+        IInvestigationHistoryStore? historyStore = null,
+        Action<Exception>? logDiagnostic = null)
     {
         _planner = planner ?? throw new ArgumentNullException(nameof(planner));
         _languageModel = languageModel ?? throw new ArgumentNullException(nameof(languageModel));
         _observationRuntime = observationRuntime ?? throw new ArgumentNullException(nameof(observationRuntime));
+        _historyStore = historyStore;
+        _logDiagnostic = logDiagnostic ?? (_ => { });
     }
 
     public async Task<AgentRunResult> RunAsync(
@@ -28,36 +34,137 @@ public sealed class AgentRuntime
         }
 
         var normalizedQuestion = question.Trim();
+        var investigationId = Guid.NewGuid();
+        var createdAtUtc = DateTimeOffset.UtcNow;
         var state = new InvestigationState(
+            investigationId,
             normalizedQuestion,
             normalizedQuestion,
+            createdAtUtc,
+            StartedAtUtc: null,
+            CompletedAtUtc: null,
+            InvestigationLifecycleStatus.Created,
             CurrentPlan: null,
+            PlanHistory: Array.Empty<InvestigationPlanHistoryEntry>(),
             Steps: Array.Empty<InvestigationStep>(),
+            StepExecutions: Array.Empty<InvestigationStepExecution>(),
             Evidence: Array.Empty<InvestigationEvidence>(),
             AvailableTools: _observationRuntime.Descriptors.ToArray(),
             Budget: new InvestigationBudget(MaximumObservationExecutions, 0),
             ReplanCount: 0,
-            Status: InvestigationStatus.Planning);
+            InvestigationExecutionPhase.Planning,
+            Outcome: null);
 
-        var initialPlan = await CreateAndValidatePlanAsync(state, cancellationToken);
-        state = ApplyPlan(state, initialPlan);
-        state = await ExecutePlanAsync(state, initialPlan, cancellationToken);
-
-        if (state.Budget.ObservationsUsed < state.Budget.MaximumObservationExecutions)
+        if (_historyStore is not null)
         {
-            state = state with
-            {
-                ReplanCount = 1,
-                Status = InvestigationStatus.Replanning
-            };
-            var revisedPlan = await CreateAndValidatePlanAsync(state, cancellationToken);
-            state = ApplyPlan(state, revisedPlan);
-            state = await ExecutePlanAsync(state, revisedPlan, cancellationToken);
+            await _historyStore.CreateAsync(ToInvestigation(state), cancellationToken);
         }
 
-        return await FinalizeAsync(
-            state with { Status = InvestigationStatus.Finalizing },
-            cancellationToken);
+        var running = false;
+        var terminalCommitAttempted = false;
+
+        try
+        {
+            var startedAtUtc = DateTimeOffset.UtcNow;
+            if (_historyStore is not null)
+            {
+                await _historyStore.MarkRunningAsync(
+                    investigationId,
+                    startedAtUtc,
+                    cancellationToken);
+            }
+
+            state = state with
+            {
+                StartedAtUtc = startedAtUtc,
+                LifecycleStatus = InvestigationLifecycleStatus.Running
+            };
+            running = true;
+
+            var initialPlan = await CreateAndValidatePlanAsync(state, cancellationToken);
+            state = await ApplyPlanAsync(state, initialPlan, cancellationToken);
+            state = await ExecutePlanAsync(state, initialPlan, cancellationToken);
+
+            if (state.Budget.ObservationsUsed < state.Budget.MaximumObservationExecutions)
+            {
+                state = state with
+                {
+                    ReplanCount = 1,
+                    ExecutionPhase = InvestigationExecutionPhase.Replanning
+                };
+                var revisedPlan = await CreateAndValidatePlanAsync(state, cancellationToken);
+                state = await ApplyPlanAsync(state, revisedPlan, cancellationToken);
+                state = await ExecutePlanAsync(state, revisedPlan, cancellationToken);
+            }
+
+            var answer = await FinalizeAsync(
+                state with { ExecutionPhase = InvestigationExecutionPhase.Finalizing },
+                cancellationToken);
+            var completedAtUtc = DateTimeOffset.UtcNow;
+            var completedOutcome = new InvestigationOutcome(FinalAnswer: answer);
+            state = state with
+            {
+                CompletedAtUtc = completedAtUtc,
+                LifecycleStatus = InvestigationLifecycleStatus.Completed,
+                Outcome = completedOutcome
+            };
+
+            terminalCommitAttempted = true;
+            await CommitTerminalOutcomeAsync(
+                state,
+                InvestigationLifecycleStatus.Completed,
+                completedOutcome,
+                completedAtUtc);
+
+            return new AgentRunResult(investigationId, answer);
+        }
+        catch (OperationCanceledException)
+        {
+            if (running && !terminalCommitAttempted && _historyStore is not null)
+            {
+                terminalCommitAttempted = true;
+                try
+                {
+                    await CommitTerminalOutcomeAsync(
+                        state,
+                        InvestigationLifecycleStatus.Cancelled,
+                        new InvestigationOutcome(FailureCode: "cancelled", FailureMessage: "The investigation was cancelled."),
+                        DateTimeOffset.UtcNow);
+                }
+                catch (Exception persistenceException)
+                {
+                    LogDiagnostic(persistenceException);
+                }
+            }
+
+            throw;
+        }
+        catch (Exception exception)
+        {
+            if (running && !terminalCommitAttempted && _historyStore is not null)
+            {
+                terminalCommitAttempted = true;
+                try
+                {
+                    await CommitTerminalOutcomeAsync(
+                        state,
+                        InvestigationLifecycleStatus.Failed,
+                        new InvestigationOutcome(
+                            FailureCode: "investigation_failed",
+                            FailureMessage: "The investigation could not be completed."),
+                        DateTimeOffset.UtcNow);
+                }
+                catch (InvestigationPersistenceException persistenceException)
+                {
+                    throw new InvestigationPersistenceException(
+                        "The investigation failed and its terminal outcome could not be persisted.",
+                        persistenceException,
+                        exception);
+                }
+            }
+
+            throw;
+        }
     }
 
     private async Task<InvestigationPlan> CreateAndValidatePlanAsync(
@@ -137,19 +244,32 @@ public sealed class AgentRuntime
         }
     }
 
-    private static InvestigationState ApplyPlan(
+    private async Task<InvestigationState> ApplyPlanAsync(
         InvestigationState state,
-        InvestigationPlan plan)
+        InvestigationPlan plan,
+        CancellationToken cancellationToken)
     {
-        var allSteps = state.Steps
-            .Concat(plan.Steps)
-            .ToArray();
-        return state with
+        var planEntry = new InvestigationPlanHistoryEntry(
+            state.PlanHistory.Count,
+            DateTimeOffset.UtcNow,
+            plan);
+        var updatedState = state with
         {
             CurrentPlan = plan,
-            Steps = allSteps,
-            Status = InvestigationStatus.Executing
+            PlanHistory = state.PlanHistory.Concat([planEntry]).ToArray(),
+            Steps = state.Steps.Concat(plan.Steps).ToArray(),
+            ExecutionPhase = InvestigationExecutionPhase.Executing
         };
+
+        if (_historyStore is not null)
+        {
+            await _historyStore.AppendPlanAsync(
+                state.InvestigationId,
+                planEntry,
+                cancellationToken);
+        }
+
+        return updatedState;
     }
 
     private async Task<InvestigationState> ExecutePlanAsync(
@@ -157,34 +277,69 @@ public sealed class AgentRuntime
         InvestigationPlan plan,
         CancellationToken cancellationToken)
     {
-        foreach (var planStep in plan.Steps)
+        var planSequence = state.PlanHistory[^1].PlanSequence;
+        for (var stepIndex = 0; stepIndex < plan.Steps.Count; stepIndex++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var planStep = plan.Steps[stepIndex];
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException)
+            {
+                await TryMarkRemainingStepsSkippedAsync(state, plan, planSequence, stepIndex);
+                throw;
+            }
+
             if (state.Budget.ObservationsUsed >= state.Budget.MaximumObservationExecutions)
             {
                 throw new AgentRuntimeException("The observation budget has been exhausted.");
             }
 
+            var requestedAtUtc = DateTimeOffset.UtcNow;
             var request = new ObservationRequest(
                 Guid.NewGuid(),
                 planStep.ToolId,
-                DateTimeOffset.UtcNow);
-            cancellationToken.ThrowIfCancellationRequested();
-            state = state with
-            {
-                Budget = state.Budget with
-                {
-                    ObservationsUsed = state.Budget.ObservationsUsed + 1
-                }
-            };
-
+                requestedAtUtc);
             ObservationResult result;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                state = state with
+                {
+                    Budget = state.Budget with
+                    {
+                        ObservationsUsed = state.Budget.ObservationsUsed + 1
+                    }
+                };
                 result = await _observationRuntime.ObserveAsync(request, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                var cancelledExecution = CreateExecution(
+                    state,
+                    planSequence,
+                    planStep,
+                    request,
+                    InvestigationStepStatus.Cancelled,
+                    result: null);
+                state = ApplyExecution(state, cancelledExecution);
+                await TryPersistCancelledExecutionAsync(state.InvestigationId, cancelledExecution);
+                await TryMarkRemainingStepsSkippedAsync(state, plan, planSequence, stepIndex + 1);
+                throw;
             }
             catch (UnknownObservationToolException exception)
             {
+                var failedExecution = CreateExecution(
+                    state,
+                    planSequence,
+                    planStep,
+                    request,
+                    InvestigationStepStatus.Failed,
+                    result: null);
+                state = ApplyExecution(state, failedExecution);
+                await PersistExecutionAsync(state.InvestigationId, failedExecution, CancellationToken.None);
+                await TryMarkRemainingStepsSkippedAsync(state, plan, planSequence, stepIndex + 1);
                 throw new AgentRuntimeException(
                     "The requested observation tool is not available.",
                     exception);
@@ -193,19 +348,27 @@ public sealed class AgentRuntime
             var status = result.Status == ObservationStatus.Succeeded
                 ? InvestigationStepStatus.Completed
                 : InvestigationStepStatus.Failed;
+            var execution = CreateExecution(
+                state,
+                planSequence,
+                planStep,
+                request,
+                status,
+                result);
+            state = ApplyExecution(state, execution);
             state = state with
             {
-                Steps = UpdateStepStatus(state.Steps, planStep.StepId, status),
                 Evidence = state.Evidence
                     .Concat([new InvestigationEvidence(planStep.StepId, result)])
                     .ToArray()
             };
+            await PersistExecutionAsync(state.InvestigationId, execution, CancellationToken.None);
         }
 
         return state;
     }
 
-    private async Task<AgentRunResult> FinalizeAsync(
+    private async Task<string> FinalizeAsync(
         InvestigationState state,
         CancellationToken cancellationToken)
     {
@@ -228,7 +391,147 @@ public sealed class AgentRuntime
             throw new AgentRuntimeException("The language model returned an empty final answer.");
         }
 
-        return new AgentRunResult(finalAnswer.Answer.Trim());
+        return finalAnswer.Answer.Trim();
+    }
+
+    private async Task CommitTerminalOutcomeAsync(
+        InvestigationState state,
+        InvestigationLifecycleStatus terminalStatus,
+        InvestigationOutcome outcome,
+        DateTimeOffset completedAtUtc)
+    {
+        if (_historyStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var committed = await _historyStore.CommitTerminalOutcomeAsync(
+                state.InvestigationId,
+                terminalStatus,
+                outcome,
+                completedAtUtc,
+                CancellationToken.None);
+            if (!committed)
+            {
+                throw new InvalidOperationException("The investigation was not in a running state.");
+            }
+        }
+        catch (InvestigationPersistenceException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new InvestigationPersistenceException(
+                "The investigation terminal outcome could not be persisted.",
+                exception);
+        }
+    }
+
+    private async Task PersistExecutionAsync(
+        Guid investigationId,
+        InvestigationStepExecution execution,
+        CancellationToken cancellationToken)
+    {
+        if (_historyStore is not null)
+        {
+            await _historyStore.AppendStepExecutionAsync(
+                investigationId,
+                execution,
+                cancellationToken);
+        }
+    }
+
+    private async Task TryPersistCancelledExecutionAsync(
+        Guid investigationId,
+        InvestigationStepExecution execution)
+    {
+        if (_historyStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _historyStore.AppendStepExecutionAsync(
+                    investigationId,
+                    execution,
+                    CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            LogDiagnostic(exception);
+        }
+    }
+
+    private async Task TryMarkRemainingStepsSkippedAsync(
+        InvestigationState state,
+        InvestigationPlan plan,
+        int planSequence,
+        int firstRemainingIndex)
+    {
+        var remainingStepIds = plan.Steps
+            .Skip(firstRemainingIndex)
+            .Select(step => step.StepId)
+            .ToArray();
+        if (remainingStepIds.Length == 0 || _historyStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _historyStore.MarkStepsSkippedAsync(
+                state.InvestigationId,
+                planSequence,
+                remainingStepIds,
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            LogDiagnostic(exception);
+        }
+    }
+
+    private InvestigationStepExecution CreateExecution(
+        InvestigationState state,
+        int planSequence,
+        InvestigationStep step,
+        ObservationRequest request,
+        InvestigationStepStatus status,
+        ObservationResult? result) =>
+        new(
+            planSequence,
+            step.StepId,
+            step.ToolId,
+            request.RequestId,
+            request.RequestedAtUtc ?? DateTimeOffset.UtcNow,
+            result?.ObservedAtUtc,
+            _observationRuntime.Descriptors
+                .First(descriptor => string.Equals(descriptor.Id, step.ToolId, StringComparison.Ordinal))
+                .ContractVersion,
+            status,
+            result);
+
+    private static InvestigationState ApplyExecution(
+        InvestigationState state,
+        InvestigationStepExecution execution)
+    {
+        var updatedSteps = UpdateStepStatus(state.Steps, execution.StepId, execution.Status);
+        var updatedCurrentPlan = state.CurrentPlan is null
+            ? null
+            : state.CurrentPlan with
+            {
+                Steps = UpdateStepStatus(state.CurrentPlan.Steps, execution.StepId, execution.Status)
+            };
+        return state with
+        {
+            CurrentPlan = updatedCurrentPlan,
+            Steps = updatedSteps,
+            StepExecutions = state.StepExecutions.Concat([execution]).ToArray()
+        };
     }
 
     private static IReadOnlyList<InvestigationStep> UpdateStepStatus(
@@ -240,4 +543,30 @@ public sealed class AgentRuntime
                 ? step with { Status = status }
                 : step)
             .ToArray();
+
+    private static Investigation ToInvestigation(InvestigationState state) =>
+        new(
+            state.InvestigationId,
+            state.Question,
+            state.Objective,
+            state.CreatedAtUtc,
+            state.StartedAtUtc,
+            state.CompletedAtUtc,
+            state.LifecycleStatus,
+            state.Outcome,
+            state.PlanHistory,
+            state.StepExecutions);
+
+    private void LogDiagnostic(Exception exception)
+    {
+        try
+        {
+            _logDiagnostic(exception);
+        }
+        catch
+        {
+            // Diagnostics must never replace the investigation outcome.
+        }
+    }
+
 }

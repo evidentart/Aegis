@@ -6,7 +6,8 @@ public enum InvestigationStepStatus
     Completed,
     Failed,
     Skipped,
-    Invalidated
+    Invalidated,
+    Cancelled
 }
 
 public sealed record InvestigationStep(
@@ -22,27 +23,79 @@ public sealed record InvestigationEvidence(
     string StepId,
     ObservationResult Result);
 
+public sealed record InvestigationPlanHistoryEntry(
+    int PlanSequence,
+    DateTimeOffset AcceptedAtUtc,
+    InvestigationPlan Plan);
+
+public sealed record InvestigationStepExecution(
+    int PlanSequence,
+    string StepId,
+    string ToolId,
+    Guid RequestId,
+    DateTimeOffset RequestedAtUtc,
+    DateTimeOffset? ObservedAtUtc,
+    string ToolContractVersion,
+    InvestigationStepStatus Status,
+    ObservationResult? Result)
+{
+    public string DisplayText =>
+        $"Plan {PlanSequence}, {StepId}, {ToolId}, {Status}";
+}
+
 public sealed record InvestigationBudget(
     int MaximumObservationExecutions,
     int ObservationsUsed);
 
-public enum InvestigationStatus
+public enum InvestigationLifecycleStatus
+{
+    Created,
+    Running,
+    Completed,
+    Failed,
+    Cancelled
+}
+
+public enum InvestigationExecutionPhase
 {
     Planning,
     Executing,
     Replanning,
-    Finalizing,
-    Completed,
-    Failed
+    Finalizing
 }
 
-public sealed record InvestigationState(
+public sealed record InvestigationOutcome(
+    string? FinalAnswer = null,
+    string? FailureCode = null,
+    string? FailureMessage = null);
+
+public sealed record Investigation(
+    Guid InvestigationId,
     string Question,
     string Objective,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? StartedAtUtc,
+    DateTimeOffset? CompletedAtUtc,
+    InvestigationLifecycleStatus LifecycleStatus,
+    InvestigationOutcome? Outcome,
+    IReadOnlyList<InvestigationPlanHistoryEntry> Plans,
+    IReadOnlyList<InvestigationStepExecution> StepExecutions);
+
+public sealed record InvestigationState(
+    Guid InvestigationId,
+    string Question,
+    string Objective,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? StartedAtUtc,
+    DateTimeOffset? CompletedAtUtc,
+    InvestigationLifecycleStatus LifecycleStatus,
     InvestigationPlan? CurrentPlan,
+    IReadOnlyList<InvestigationPlanHistoryEntry> PlanHistory,
     IReadOnlyList<InvestigationStep> Steps,
+    IReadOnlyList<InvestigationStepExecution> StepExecutions,
     IReadOnlyList<InvestigationEvidence> Evidence,
     IReadOnlyList<ObservationToolDescriptor> AvailableTools,
     InvestigationBudget Budget,
     int ReplanCount,
-    InvestigationStatus Status);
+    InvestigationExecutionPhase ExecutionPhase,
+    InvestigationOutcome? Outcome);

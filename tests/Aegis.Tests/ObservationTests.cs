@@ -76,7 +76,7 @@ public sealed class ObservationTests
         });
         var runtime = new ObservationRuntime(new ObservationRegistry([tool]));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
             runtime.ObserveAsync(CreateRequest("test.tool"), cancellation.Token));
     }
 
@@ -148,6 +148,17 @@ public sealed class ObservationTests
         Assert.Equal(
             ["Platform", "OsVersion", "Build", "Architecture"],
             typeof(WindowsSystemInfo).GetProperties().Select(property => property.Name).ToArray());
+    }
+
+    [Fact]
+    public void BaselineEligibilityIsExplicitAtCapabilityLevel()
+    {
+        var systemInfo = new WindowsSystemInfoObservationTool();
+        var defaultDescriptor = new FakeObservationTool("other.tool").Descriptor;
+
+        Assert.True(systemInfo.Descriptor.BaselineEligible);
+        Assert.False(defaultDescriptor.BaselineEligible);
+        Assert.Equal(WindowsSystemInfoObservationTool.ToolId, systemInfo.Descriptor.Id);
     }
 
     [Fact]

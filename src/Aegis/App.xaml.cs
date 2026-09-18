@@ -1,4 +1,5 @@
 using Aegis.Core;
+using Aegis.Persistence;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using OpenAI.Chat;
@@ -12,6 +13,8 @@ public partial class App : Application
     private readonly ILogger<App> _logger;
     private readonly InvestigationService _investigationService;
     private readonly ObservationRuntime _observationRuntime;
+    private readonly InvestigationHistoryService _historyService;
+    private readonly BaselineService _baselineService;
     private Window? _window;
 
     public App()
@@ -24,6 +27,26 @@ public partial class App : Application
         _observationRuntime = new ObservationRuntime(
             observationRegistry,
             exception => _logger.LogError(exception, "Observation tool execution failed."));
+
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Aegis",
+            "aegis.db");
+        var persistenceStore = new SqliteInvestigationStore(new SqliteDatabase(databasePath));
+        try
+        {
+            persistenceStore.Initialize();
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Aegis local history storage could not be initialized.");
+        }
+
+        _historyService = new InvestigationHistoryService(persistenceStore);
+        _baselineService = new BaselineService(
+            persistenceStore,
+            persistenceStore,
+            observationRegistry);
 
         var apiKey = Environment.GetEnvironmentVariable("AEGIS_OPENAI_API_KEY");
         var model = Environment.GetEnvironmentVariable("AEGIS_OPENAI_MODEL");
@@ -44,13 +67,19 @@ public partial class App : Application
             new AgentRuntime(
                 new LanguageModelInvestigationPlanner(languageModel),
                 languageModel,
-                _observationRuntime));
+                _observationRuntime,
+                persistenceStore,
+                exception => _logger.LogError(exception, "Investigation persistence failed.")));
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _logger.LogInformation("Starting {ApplicationName} {ApplicationVersion}.", Aegis.Core.ApplicationInfo.Name, Aegis.Core.ApplicationInfo.Version);
-        _window = new MainWindow(_investigationService, _logger);
+        _window = new MainWindow(
+            _investigationService,
+            _logger,
+            _historyService,
+            _baselineService);
         _window.Activate();
     }
 

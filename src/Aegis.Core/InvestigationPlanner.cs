@@ -148,7 +148,8 @@ internal static class InvestigationModelContext
     private static string SerializeStateSummary(InvestigationState state) =>
         JsonSerializer.Serialize(new
         {
-            investigation_status = state.Status.ToString(),
+            investigation_phase = state.ExecutionPhase.ToString(),
+            lifecycle_status = state.LifecycleStatus.ToString(),
             objective = state.Objective,
             replan_count = state.ReplanCount,
             budget = new

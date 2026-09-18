@@ -1,4 +1,4 @@
-<Window x:Class="Aegis.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Aegis">
+<Window x:Class="Aegis.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Aegis" Activated="MainWindow_Activated">
   <Window.SystemBackdrop>
     <MicaBackdrop />
   </Window.SystemBackdrop>
@@ -6,6 +6,7 @@
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
+      <RowDefinition Height="260" />
     </Grid.RowDefinitions>
     <StackPanel Spacing="8">
       <TextBlock Text="Aegis" FontSize="32" FontWeight="SemiBold" />
@@ -23,5 +24,28 @@
         <TextBlock x:Name="AnswerTextBlock" TextWrapping="Wrap" Visibility="Collapsed" />
       </StackPanel>
     </Border>
+    <Grid Grid.Row="2" ColumnSpacing="16">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="1.1*" />
+        <ColumnDefinition Width="1.4*" />
+      </Grid.ColumnDefinitions>
+      <StackPanel Grid.Column="0" Spacing="6">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="History" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <Button Content="Refresh" Click="RefreshHistoryButton_Click" />
+        </StackPanel>
+        <ListView x:Name="HistoryListView" DisplayMemberPath="DisplayText" SelectionChanged="HistoryListView_SelectionChanged" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Spacing="6">
+        <TextBlock Text="Investigation detail" FontSize="18" FontWeight="SemiBold" />
+        <TextBlock x:Name="HistoryDetailTextBlock" TextWrapping="Wrap" Opacity="0.82" />
+        <ListView x:Name="ObservationListView" DisplayMemberPath="DisplayText" SelectionChanged="ObservationListView_SelectionChanged" MaxHeight="90" />
+        <Button x:Name="CreateBaselineButton" Content="Create baseline from selected observation" Click="CreateBaselineButton_Click" IsEnabled="False" HorizontalAlignment="Left" />
+        <TextBlock x:Name="BaselineStatusTextBlock" TextWrapping="Wrap" Opacity="0.72" />
+        <TextBlock Text="Baselines" FontWeight="SemiBold" />
+        <ListView x:Name="BaselineListView" DisplayMemberPath="DisplayText" SelectionChanged="BaselineListView_SelectionChanged" MaxHeight="70" />
+        <TextBlock x:Name="BaselineDetailTextBlock" TextWrapping="Wrap" Opacity="0.72" />
+      </StackPanel>
+    </Grid>
   </Grid>
 </Window>

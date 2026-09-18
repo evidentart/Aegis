@@ -155,7 +155,7 @@ public sealed class OpenAiLanguageModelTests
         var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
             cancellationToken: cancellation.Token));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        await Assert.ThrowsAsync<TaskCanceledException>(() =>
             model.CompleteAsync(
                 CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")),
                 cancellation.Token));

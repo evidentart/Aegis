@@ -16,7 +16,8 @@ public sealed class WindowsSystemInfoObservationTool : IObservationTool
     public ObservationToolDescriptor Descriptor { get; } = new(
         ToolId,
         "Windows system information",
-        "Reads the Windows platform, version, build, and architecture.");
+        "Reads the Windows platform, version, build, and architecture.",
+        BaselineEligible: true);
 
     public Task<ObservationResult> ObserveAsync(
         ObservationRequest request,

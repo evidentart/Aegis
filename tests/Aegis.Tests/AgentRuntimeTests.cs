@@ -306,7 +306,7 @@ public sealed class AgentRuntimeTests
         var model = new FakeLanguageModel(new FinalAnswerDecision("Never reached."));
         var runtime = CreateRuntime(planner, model, new FakeObservationTool("tool.one"));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
             runtime.RunAsync("Question", cancellation.Token));
     }
 
@@ -321,7 +321,7 @@ public sealed class AgentRuntimeTests
         var tool = new FakeObservationTool("tool.one");
         var runtime = CreateRuntime(planner, model, tool);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
             runtime.RunAsync("Question", cancellation.Token));
 
         Assert.Equal(1, tool.InvocationCount);
@@ -340,18 +340,96 @@ public sealed class AgentRuntimeTests
             cancellationAction: token => throw new OperationCanceledException(token));
         var runtime = CreateRuntime(planner, model, tool);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
             runtime.RunAsync("Question", cancellation.Token));
+    }
+
+    [Fact]
+    public async Task PersistsOneTerminalOutcomeAfterIncrementalFacts()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision("Final answer."));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(planner, model, new FakeObservationTool("tool.one"), store);
+
+        var result = await runtime.RunAsync("Question");
+
+        Assert.NotEqual(Guid.Empty, result.InvestigationId);
+        Assert.Equal(
+            ["create", "running", "plan:0", "step:step-1", "step:step-2", "step:step-3", "terminal:Completed"],
+            store.Events);
+        Assert.Equal(1, store.TerminalCommitCount);
+    }
+
+    [Fact]
+    public async Task DoesNotRetryTerminalCommitAndDoesNotReturnAnswerAfterPersistenceFailure()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var providerFailure = new LanguageModelException("provider failure");
+        var model = new FakeLanguageModel(providerFailure);
+        var store = new RecordingHistoryStore { TerminalException = new InvalidOperationException("write failed") };
+        var runtime = CreateRuntime(planner, model, new FakeObservationTool("tool.one"), store);
+
+        var exception = await Assert.ThrowsAsync<InvestigationPersistenceException>(() =>
+            runtime.RunAsync("Question"));
+
+        Assert.Same(providerFailure, exception.OriginalException);
+        Assert.Equal(1, store.TerminalCommitCount);
+        Assert.DoesNotContain("terminal:Completed", store.Events);
+        Assert.Equal("terminal:Failed", store.Events[^1]);
+    }
+
+    [Fact]
+    public async Task DoesNotExecuteObservationsWhenCreationFails()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision("Never reached."));
+        var tool = new FakeObservationTool("tool.one");
+        var store = new RecordingHistoryStore { CreateException = new InvalidOperationException("create failed") };
+        var runtime = CreateRuntime(planner, model, tool, store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => runtime.RunAsync("Question"));
+
+        Assert.Equal(0, tool.InvocationCount);
+        Assert.Equal(0, store.TerminalCommitCount);
+    }
+
+    [Fact]
+    public async Task CancellationCommitsCancelledExactlyOnce()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision("Never reached."));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool(
+                "tool.one",
+                cancellationAction: token => throw new OperationCanceledException(token)),
+            store);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            runtime.RunAsync("Question", cancellation.Token));
+
+        Assert.Equal(1, store.TerminalCommitCount);
+        Assert.Equal("terminal:Cancelled", store.Events[^1]);
     }
 
     private static AgentRuntime CreateRuntime(
         IInvestigationPlanner planner,
         ILanguageModel model,
-        FakeObservationTool tool) =>
+        FakeObservationTool tool,
+        IInvestigationHistoryStore? historyStore = null) =>
         new(
             planner,
             model,
-            new ObservationRuntime(new ObservationRegistry([tool])));
+            new ObservationRuntime(new ObservationRegistry([tool])),
+            historyStore);
 
     private static InvestigationPlan CreatePlan(
         params string[] stepIds) =>
@@ -510,5 +588,68 @@ public sealed class AgentRuntimeTests
                 Interlocked.Decrement(ref _activeInvocations);
             }
         }
+    }
+
+    private sealed class RecordingHistoryStore : IInvestigationHistoryStore
+    {
+        public List<string> Events { get; } = [];
+        public int TerminalCommitCount { get; private set; }
+        public Exception? CreateException { get; init; }
+        public Exception? TerminalException { get; init; }
+
+        public Task CreateAsync(Investigation investigation, CancellationToken cancellationToken = default)
+        {
+            if (CreateException is not null)
+            {
+                throw CreateException;
+            }
+
+            Events.Add("create");
+            return Task.CompletedTask;
+        }
+
+        public Task MarkRunningAsync(Guid investigationId, DateTimeOffset startedAtUtc, CancellationToken cancellationToken = default)
+        {
+            Events.Add("running");
+            return Task.CompletedTask;
+        }
+
+        public Task AppendPlanAsync(Guid investigationId, InvestigationPlanHistoryEntry plan, CancellationToken cancellationToken = default)
+        {
+            Events.Add($"plan:{plan.PlanSequence}");
+            return Task.CompletedTask;
+        }
+
+        public Task AppendStepExecutionAsync(Guid investigationId, InvestigationStepExecution execution, CancellationToken cancellationToken = default)
+        {
+            Events.Add($"step:{execution.StepId}");
+            return Task.CompletedTask;
+        }
+
+        public Task MarkStepsSkippedAsync(Guid investigationId, int planSequence, IReadOnlyList<string> stepIds, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task<bool> CommitTerminalOutcomeAsync(
+            Guid investigationId,
+            InvestigationLifecycleStatus terminalStatus,
+            InvestigationOutcome outcome,
+            DateTimeOffset completedAtUtc,
+            CancellationToken cancellationToken = default)
+        {
+            TerminalCommitCount++;
+            Events.Add($"terminal:{terminalStatus}");
+            if (TerminalException is not null)
+            {
+                throw TerminalException;
+            }
+
+            return Task.FromResult(true);
+        }
+
+        public Task<IReadOnlyList<InvestigationSummary>> ListAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<InvestigationSummary>>([]);
+
+        public Task<InvestigationDetails?> GetAsync(Guid investigationId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<InvestigationDetails?>(null);
     }
 }
