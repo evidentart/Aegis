@@ -18,6 +18,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <Compile Include="..\..\src\Aegis\OpenAiLanguageModel.cs" Link="OpenAiLanguageModel.cs" />
     <Compile Include="..\..\src\Aegis\WindowsSystemInfoObservationTool.cs" Link="WindowsSystemInfoObservationTool.cs" />
+    <Compile Include="..\..\src\Aegis\WindowsPerformanceSystemObservationTool.cs" Link="WindowsPerformanceSystemObservationTool.cs" />
+    <Compile Include="..\..\src\Aegis\WindowsPerformanceTopProcessesObservationTool.cs" Link="WindowsPerformanceTopProcessesObservationTool.cs" />
     <Compile Include="..\..\src\Aegis\Persistence\SqlitePersistence.cs" Link="Persistence\SqlitePersistence.cs" />
     <Compile Include="..\..\src\Aegis\Persistence\HistoryServices.cs" Link="Persistence\HistoryServices.cs" />
   </ItemGroup>

@@ -173,8 +173,140 @@ public sealed class ObservationTests
         Assert.DoesNotContain("Arguments", propertyNames);
     }
 
+    [Fact]
+    public async Task PerformanceToolsHaveExactArgumentFreeNonBaselineContracts()
+    {
+        var systemTool = new WindowsPerformanceSystemObservationTool(
+            new FixedSystemSampler(new WindowsPerformanceSystem(
+                12.5,
+                16_000,
+                8_000,
+                50,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMilliseconds(500))));
+        var topProcessesTool = new WindowsPerformanceTopProcessesObservationTool(
+            new FixedTopProcessesSampler(new WindowsTopProcessesCapture(
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMilliseconds(500),
+                new SystemTimeSample(0, 0, 0),
+                new SystemTimeSample(0, 100, 0),
+                [new NativeProcessSample(1, "one.exe", 7, 0, 0, 100)],
+                [new NativeProcessSample(1, "one.exe", 7, 20, 0, 200)])));
+
+        Assert.Equal("windows.performance.system", systemTool.Descriptor.Id);
+        Assert.Equal("windows.performance.top_processes", topProcessesTool.Descriptor.Id);
+        Assert.False(systemTool.Descriptor.BaselineEligible);
+        Assert.False(topProcessesTool.Descriptor.BaselineEligible);
+        Assert.Equal(
+            ["RequestId", "ToolId", "RequestedAtUtc"],
+            typeof(ObservationRequest).GetProperties().Select(property => property.Name).ToArray());
+
+        var systemResult = await systemTool.ObserveAsync(CreateRequest(systemTool.Descriptor.Id));
+        var topProcessesResult = await topProcessesTool.ObserveAsync(CreateRequest(topProcessesTool.Descriptor.Id));
+        Assert.IsType<WindowsPerformanceSystem>(systemResult.Data);
+        Assert.IsType<WindowsPerformanceTopProcesses>(topProcessesResult.Data);
+    }
+
+    [Fact]
+    public void NormalizesProcessCpuAgainstSystemCapacity()
+    {
+        var cpu = WindowsPerformanceCalculations.CalculateProcessCpuUtilizationPercent(
+            firstKernelTicks: 100,
+            secondKernelTicks: 120,
+            firstUserTicks: 50,
+            secondUserTicks: 70,
+            systemCpuCapacityDelta: 200);
+
+        Assert.Equal(20, cpu);
+    }
+
+    [Fact]
+    public void RejectsPidReuseAndBoundsBothProcessRankings()
+    {
+        var first = Enumerable.Range(1, 13)
+            .Select(processId => new NativeProcessSample(
+                processId,
+                $"process-{processId}.exe",
+                CreationTimeTicks: 7,
+                KernelTicks: 0,
+                UserTicks: 0,
+                WorkingSetBytes: (ulong)processId * 1_000))
+            .ToArray();
+        var second = Enumerable.Range(1, 13)
+            .Select(processId => new NativeProcessSample(
+                processId,
+                $"process-{processId}.exe",
+                CreationTimeTicks: processId == 13 ? 8UL : 7UL,
+                KernelTicks: (ulong)processId * 5,
+                UserTicks: 0,
+                WorkingSetBytes: (ulong)(14 - processId) * 1_000))
+            .ToArray();
+
+        var result = WindowsTopProcessesBuilder.Build(new WindowsTopProcessesCapture(
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(1),
+            new SystemTimeSample(0, 0, 0),
+            new SystemTimeSample(0, 100, 0),
+            first,
+            second));
+
+        Assert.Equal(10, result.TopCpuProcesses.Count);
+        Assert.Equal(10, result.TopMemoryProcesses.Count);
+        Assert.DoesNotContain(result.TopCpuProcesses, process => process.ProcessId == 13);
+        Assert.DoesNotContain(result.TopMemoryProcesses, process => process.ProcessId == 13);
+        Assert.Equal(12, result.TopCpuProcesses[0].ProcessId);
+        Assert.Equal(1, result.TopMemoryProcesses[0].ProcessId);
+        Assert.Equal(60, result.TopCpuProcesses[0].CpuUtilizationPercent);
+    }
+
+    [Fact]
+    public void RejectsInvalidPerformanceCalculationsInsteadOfHidingThem()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsPerformanceCalculations.CalculateProcessCpuUtilizationPercent(
+                0,
+                101,
+                0,
+                0,
+                systemCpuCapacityDelta: 100));
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsPerformanceCalculations.CalculateSystemCpuUtilizationPercent(
+                10,
+                0,
+                100,
+                100,
+                100,
+                100));
+    }
+
     private static ObservationRequest CreateRequest(string toolId) =>
         new(Guid.NewGuid(), toolId);
+
+    private sealed class FixedSystemSampler : IWindowsPerformanceSystemSampler
+    {
+        private readonly WindowsPerformanceSystem _result;
+
+        public FixedSystemSampler(WindowsPerformanceSystem result) => _result = result;
+
+        public Task<WindowsPerformanceSystem> CaptureAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_result);
+        }
+    }
+
+    private sealed class FixedTopProcessesSampler : IWindowsTopProcessesSampler
+    {
+        private readonly WindowsTopProcessesCapture _result;
+
+        public FixedTopProcessesSampler(WindowsTopProcessesCapture result) => _result = result;
+
+        public Task<WindowsTopProcessesCapture> CaptureAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_result);
+        }
+    }
 
     private sealed class FakeObservationTool : IObservationTool
     {

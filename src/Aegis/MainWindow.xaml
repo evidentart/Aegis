@@ -40,6 +40,7 @@
         <TextBlock Text="Investigation detail" FontSize="18" FontWeight="SemiBold" />
         <TextBlock x:Name="HistoryDetailTextBlock" TextWrapping="Wrap" Opacity="0.82" />
         <ListView x:Name="ObservationListView" DisplayMemberPath="DisplayText" SelectionChanged="ObservationListView_SelectionChanged" MaxHeight="90" />
+        <TextBlock x:Name="ObservationDetailTextBlock" TextWrapping="Wrap" Opacity="0.72" />
         <Button x:Name="CreateBaselineButton" Content="Create baseline from selected observation" Click="CreateBaselineButton_Click" IsEnabled="False" HorizontalAlignment="Left" />
         <TextBlock x:Name="BaselineStatusTextBlock" TextWrapping="Wrap" Opacity="0.72" />
         <TextBlock Text="Baselines" FontWeight="SemiBold" />

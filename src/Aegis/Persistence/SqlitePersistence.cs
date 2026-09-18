@@ -60,7 +60,7 @@ public sealed class SqliteDatabase
             var version = Convert.ToInt32(
                 ExecuteScalar(connection, transaction, "SELECT COALESCE(MAX(Version), 0) FROM SchemaVersions"),
                 CultureInfo.InvariantCulture);
-            if (version > 2)
+            if (version > 3)
             {
                 throw new InvalidOperationException($"The database schema version '{version}' is newer than this application supports.");
             }
@@ -188,6 +188,55 @@ public sealed class SqliteDatabase
                     CREATE INDEX IX_StepExecutions_Investigation
                         ON StepExecutions(InvestigationId, PlanSequence, ExecutionId);
                     INSERT INTO SchemaVersions (Version) VALUES (2);
+                    """);
+            }
+
+            if (version < 3)
+            {
+                ExecuteNonQuery(connection, transaction, """
+                    CREATE TABLE WindowsPerformanceSystemObservations (
+                        ObservationId INTEGER PRIMARY KEY NOT NULL,
+                        SampleStartedAtUtc TEXT NOT NULL,
+                        SampleDurationTicks INTEGER NOT NULL,
+                        CpuUtilizationPercent REAL NOT NULL,
+                        PhysicalMemoryTotalBytes INTEGER NOT NULL,
+                        PhysicalMemoryAvailableBytes INTEGER NOT NULL,
+                        MemoryLoadPercent INTEGER NOT NULL,
+                        CHECK (SampleDurationTicks > 0),
+                        CHECK (CpuUtilizationPercent >= 0 AND CpuUtilizationPercent <= 100),
+                        CHECK (PhysicalMemoryTotalBytes >= 0),
+                        CHECK (PhysicalMemoryAvailableBytes >= 0),
+                        CHECK (PhysicalMemoryAvailableBytes <= PhysicalMemoryTotalBytes),
+                        CHECK (MemoryLoadPercent >= 0 AND MemoryLoadPercent <= 100),
+                        FOREIGN KEY (ObservationId) REFERENCES Observations(ObservationId)
+                    );
+                    CREATE TABLE WindowsPerformanceTopProcessSnapshots (
+                        ObservationId INTEGER PRIMARY KEY NOT NULL,
+                        SampleStartedAtUtc TEXT NOT NULL,
+                        SampleDurationTicks INTEGER NOT NULL,
+                        CHECK (SampleDurationTicks > 0),
+                        FOREIGN KEY (ObservationId) REFERENCES Observations(ObservationId)
+                    );
+                    CREATE TABLE WindowsPerformanceTopProcessEntries (
+                        ObservationId INTEGER NOT NULL,
+                        RankingKind TEXT NOT NULL,
+                        RankingOrdinal INTEGER NOT NULL,
+                        ProcessId INTEGER NOT NULL,
+                        ProcessName TEXT NOT NULL,
+                        CpuUtilizationPercent REAL NOT NULL,
+                        WorkingSetBytes INTEGER NOT NULL,
+                        CHECK (RankingKind IN ('cpu', 'memory')),
+                        CHECK (RankingOrdinal >= 0 AND RankingOrdinal < 10),
+                        CHECK (ProcessId > 0),
+                        CHECK (length(ProcessName) > 0),
+                        CHECK (CpuUtilizationPercent >= 0 AND CpuUtilizationPercent <= 100),
+                        CHECK (WorkingSetBytes >= 0),
+                        PRIMARY KEY (ObservationId, RankingKind, RankingOrdinal),
+                        FOREIGN KEY (ObservationId) REFERENCES WindowsPerformanceTopProcessSnapshots(ObservationId)
+                    );
+                    CREATE INDEX IX_WindowsPerformanceTopProcessEntries_Observation
+                        ON WindowsPerformanceTopProcessEntries(ObservationId, RankingKind, RankingOrdinal);
+                    INSERT INTO SchemaVersions (Version) VALUES (3);
                     """);
             }
 
@@ -779,11 +828,7 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         InvestigationStepExecution execution)
     {
         var result = execution.Result!;
-        if (result.Data is not null and not WindowsSystemInfo)
-        {
-            throw new InvalidOperationException("The observation data type is not supported by persistence.");
-        }
-
+        ValidateObservationData(result);
         var data = result.Data as WindowsSystemInfo;
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -808,7 +853,198 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         SqliteDatabase.AddParameter(command, "$osVersion", data?.OsVersion);
         SqliteDatabase.AddParameter(command, "$build", data?.Build);
         SqliteDatabase.AddParameter(command, "$architecture", data?.Architecture);
-        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        var observationId = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+
+        switch (result.Data)
+        {
+            case WindowsPerformanceSystem system:
+                InsertPerformanceSystemObservation(connection, transaction, observationId, system);
+                break;
+            case WindowsPerformanceTopProcesses processes:
+                InsertTopProcessObservation(connection, transaction, observationId, processes);
+                break;
+        }
+
+        return observationId;
+    }
+
+    private static void ValidateObservationData(ObservationResult result)
+    {
+        if (result.Status != ObservationStatus.Succeeded && result.Data is not null)
+        {
+            throw new InvalidOperationException("A failed observation cannot contain typed observation data.");
+        }
+
+        switch (result.Data)
+        {
+            case null:
+                return;
+            case WindowsSystemInfo:
+                EnsureObservationTool(result, WindowsSystemInfoObservationTool.ToolId);
+                return;
+            case WindowsPerformanceSystem system:
+                EnsureObservationTool(result, WindowsPerformanceSystemObservationTool.ToolId);
+                ValidateSample(system.SampleStartedAtUtc, system.SampleDuration);
+                ValidatePercentage(system.CpuUtilizationPercent, "system CPU utilization");
+                if (system.PhysicalMemoryAvailableBytes > system.PhysicalMemoryTotalBytes)
+                {
+                    throw new InvalidOperationException("Available physical memory cannot exceed total physical memory.");
+                }
+
+                if (system.MemoryLoadPercent is < 0 or > 100)
+                {
+                    throw new InvalidOperationException("Memory load must be between 0 and 100 percent.");
+                }
+
+                EnsureSqliteInteger(system.PhysicalMemoryTotalBytes, "total physical memory");
+                EnsureSqliteInteger(system.PhysicalMemoryAvailableBytes, "available physical memory");
+                return;
+            case WindowsPerformanceTopProcesses processes:
+                EnsureObservationTool(result, WindowsPerformanceTopProcessesObservationTool.ToolId);
+                ValidateSample(processes.SampleStartedAtUtc, processes.SampleDuration);
+                ValidateProcessEntries(processes.TopCpuProcesses, "cpu");
+                ValidateProcessEntries(processes.TopMemoryProcesses, "memory");
+                return;
+            default:
+                throw new InvalidOperationException("The observation data type is not supported by persistence.");
+        }
+    }
+
+    private static void EnsureObservationTool(ObservationResult result, string expectedToolId)
+    {
+        if (!string.Equals(result.ToolId, expectedToolId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The observation data type does not match the observation ToolId.");
+        }
+    }
+
+    private static void ValidateSample(DateTimeOffset sampleStartedAtUtc, TimeSpan sampleDuration)
+    {
+        _ = sampleStartedAtUtc;
+        if (sampleDuration <= TimeSpan.Zero || sampleDuration > TimeSpan.FromSeconds(5))
+        {
+            throw new InvalidOperationException("The performance sample duration was outside the supported range.");
+        }
+    }
+
+    private static void ValidateProcessEntries(
+        IReadOnlyList<WindowsPerformanceProcess> processes,
+        string rankingKind)
+    {
+        ArgumentNullException.ThrowIfNull(processes);
+        if (processes.Count > 10)
+        {
+            throw new InvalidOperationException($"The {rankingKind} process ranking exceeds the supported bound.");
+        }
+
+        var processIds = new HashSet<int>();
+        foreach (var process in processes)
+        {
+            ArgumentNullException.ThrowIfNull(process);
+            if (process.ProcessId <= 0 || string.IsNullOrWhiteSpace(process.ProcessName) ||
+                !processIds.Add(process.ProcessId))
+            {
+                throw new InvalidOperationException($"The {rankingKind} process ranking contains invalid identity data.");
+            }
+
+            ValidatePercentage(process.CpuUtilizationPercent, "process CPU utilization");
+            EnsureSqliteInteger(process.WorkingSetBytes, "process working-set bytes");
+        }
+    }
+
+    private static void ValidatePercentage(double value, string name)
+    {
+        if (!double.IsFinite(value) || value is < 0 or > 100)
+        {
+            throw new InvalidOperationException($"The {name} value must be finite and between 0 and 100 percent.");
+        }
+    }
+
+    private static long EnsureSqliteInteger(ulong value, string name)
+    {
+        if (value > long.MaxValue)
+        {
+            throw new InvalidOperationException($"The {name} value is too large for SQLite integer storage.");
+        }
+
+        return (long)value;
+    }
+
+    private static void InsertPerformanceSystemObservation(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long observationId,
+        WindowsPerformanceSystem system)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO WindowsPerformanceSystemObservations
+                (ObservationId, SampleStartedAtUtc, SampleDurationTicks, CpuUtilizationPercent,
+                 PhysicalMemoryTotalBytes, PhysicalMemoryAvailableBytes, MemoryLoadPercent)
+            VALUES ($observation, $started, $duration, $cpu, $total, $available, $load);
+            """;
+        SqliteDatabase.AddParameter(command, "$observation", observationId);
+        SqliteDatabase.AddParameter(command, "$started", FormatDate(system.SampleStartedAtUtc));
+        SqliteDatabase.AddParameter(command, "$duration", system.SampleDuration.Ticks);
+        SqliteDatabase.AddParameter(command, "$cpu", system.CpuUtilizationPercent);
+        SqliteDatabase.AddParameter(command, "$total", EnsureSqliteInteger(system.PhysicalMemoryTotalBytes, "total physical memory"));
+        SqliteDatabase.AddParameter(command, "$available", EnsureSqliteInteger(system.PhysicalMemoryAvailableBytes, "available physical memory"));
+        SqliteDatabase.AddParameter(command, "$load", system.MemoryLoadPercent);
+        command.ExecuteNonQuery();
+    }
+
+    private static void InsertTopProcessObservation(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long observationId,
+        WindowsPerformanceTopProcesses processes)
+    {
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO WindowsPerformanceTopProcessSnapshots
+                    (ObservationId, SampleStartedAtUtc, SampleDurationTicks)
+                VALUES ($observation, $started, $duration);
+                """;
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            SqliteDatabase.AddParameter(command, "$started", FormatDate(processes.SampleStartedAtUtc));
+            SqliteDatabase.AddParameter(command, "$duration", processes.SampleDuration.Ticks);
+            command.ExecuteNonQuery();
+        }
+
+        InsertTopProcessEntries(connection, transaction, observationId, "cpu", processes.TopCpuProcesses);
+        InsertTopProcessEntries(connection, transaction, observationId, "memory", processes.TopMemoryProcesses);
+    }
+
+    private static void InsertTopProcessEntries(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long observationId,
+        string rankingKind,
+        IReadOnlyList<WindowsPerformanceProcess> processes)
+    {
+        for (var index = 0; index < processes.Count; index++)
+        {
+            var process = processes[index];
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO WindowsPerformanceTopProcessEntries
+                    (ObservationId, RankingKind, RankingOrdinal, ProcessId, ProcessName,
+                     CpuUtilizationPercent, WorkingSetBytes)
+                VALUES ($observation, $ranking, $ordinal, $pid, $name, $cpu, $workingSet);
+                """;
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            SqliteDatabase.AddParameter(command, "$ranking", rankingKind);
+            SqliteDatabase.AddParameter(command, "$ordinal", index);
+            SqliteDatabase.AddParameter(command, "$pid", process.ProcessId);
+            SqliteDatabase.AddParameter(command, "$name", process.ProcessName);
+            SqliteDatabase.AddParameter(command, "$cpu", process.CpuUtilizationPercent);
+            SqliteDatabase.AddParameter(command, "$workingSet", EnsureSqliteInteger(process.WorkingSetBytes, "process working-set bytes"));
+            command.ExecuteNonQuery();
+        }
     }
 
     private static IReadOnlyList<InvestigationPlanHistoryEntry> ReadPlans(
@@ -879,7 +1115,7 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         command.CommandText = """
             SELECT se.PlanSequence, se.StepId, se.ToolId, se.RequestId,
                    se.RequestedAtUtc, se.ObservedAtUtc, se.ToolContractVersion, se.Status,
-                   o.RequestId, o.ToolId, o.ObservedAtUtc, o.Status,
+                   o.ObservationId, o.RequestId, o.ToolId, o.ObservedAtUtc, o.Status,
                    o.FailureCode, o.FailureMessage, o.Platform, o.OsVersion,
                    o.Build, o.Architecture
             FROM StepExecutions se
@@ -894,21 +1130,26 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
             ObservationResult? result = null;
             if (!reader.IsDBNull(8))
             {
-                IObservationData? data = reader.IsDBNull(14)
+                var observationId = reader.GetInt64(8);
+                var data = reader.GetInt32(12) == (int)ObservationStatus.Succeeded
+                    ? ReadObservationData(
+                        connection,
+                        observationId,
+                        reader.GetString(10),
+                        reader,
+                        15,
+                        16,
+                        17,
+                        18)
+                    : null;
+                var failure = reader.IsDBNull(13)
                     ? null
-                    : new WindowsSystemInfo(
-                        reader.GetString(14),
-                        reader.GetString(15),
-                        reader.IsDBNull(16) ? null : reader.GetInt32(16),
-                        reader.GetString(17));
-                var failure = reader.IsDBNull(12)
-                    ? null
-                    : new ObservationFailure(reader.GetString(12), reader.GetString(13));
+                    : new ObservationFailure(reader.GetString(13), reader.GetString(14));
                 result = new ObservationResult(
-                    ParseGuid(reader.GetString(8)),
-                    reader.GetString(9),
-                    ParseDate(reader.GetString(10)),
-                    (ObservationStatus)reader.GetInt32(11),
+                    ParseGuid(reader.GetString(9)),
+                    reader.GetString(10),
+                    ParseDate(reader.GetString(11)),
+                    (ObservationStatus)reader.GetInt32(12),
                     data,
                     failure);
             }
@@ -926,6 +1167,190 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         }
 
         return executions;
+    }
+
+    private static IObservationData? ReadObservationData(
+        SqliteConnection connection,
+        long observationId,
+        string toolId,
+        SqliteDataReader observationReader,
+        int platformIndex,
+        int osVersionIndex,
+        int buildIndex,
+        int architectureIndex)
+    {
+        if (string.Equals(toolId, WindowsSystemInfoObservationTool.ToolId, StringComparison.Ordinal))
+        {
+            return observationReader.IsDBNull(platformIndex)
+                ? null
+                : new WindowsSystemInfo(
+                    observationReader.GetString(platformIndex),
+                    observationReader.GetString(osVersionIndex),
+                    observationReader.IsDBNull(buildIndex) ? null : observationReader.GetInt32(buildIndex),
+                    observationReader.GetString(architectureIndex));
+        }
+
+        if (string.Equals(toolId, WindowsPerformanceSystemObservationTool.ToolId, StringComparison.Ordinal))
+        {
+            return ReadPerformanceSystemObservation(connection, observationId);
+        }
+
+        if (string.Equals(toolId, WindowsPerformanceTopProcessesObservationTool.ToolId, StringComparison.Ordinal))
+        {
+            return ReadTopProcessObservation(connection, observationId);
+        }
+
+        return null;
+    }
+
+    private static WindowsPerformanceSystem ReadPerformanceSystemObservation(
+        SqliteConnection connection,
+        long observationId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT SampleStartedAtUtc, SampleDurationTicks, CpuUtilizationPercent,
+                   PhysicalMemoryTotalBytes, PhysicalMemoryAvailableBytes, MemoryLoadPercent
+            FROM WindowsPerformanceSystemObservations
+            WHERE ObservationId = $observation;
+            """;
+        SqliteDatabase.AddParameter(command, "$observation", observationId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvestigationPersistenceException(
+                "The persisted system performance observation is incomplete.");
+        }
+
+        var duration = ReadSampleDuration(reader.GetInt64(1));
+        var cpu = reader.GetDouble(2);
+        ValidatePercentage(cpu, "system CPU utilization");
+        var total = ReadUnsignedInteger(reader.GetInt64(3), "total physical memory");
+        var available = ReadUnsignedInteger(reader.GetInt64(4), "available physical memory");
+        var load = reader.GetInt32(5);
+        if (available > total || load is < 0 or > 100)
+        {
+            throw new InvestigationPersistenceException(
+                "The persisted system performance observation contains invalid memory data.");
+        }
+
+        return new WindowsPerformanceSystem(
+            cpu,
+            total,
+            available,
+            load,
+            ParseDate(reader.GetString(0)),
+            duration);
+    }
+
+    private static WindowsPerformanceTopProcesses ReadTopProcessObservation(
+        SqliteConnection connection,
+        long observationId)
+    {
+        DateTimeOffset sampleStartedAtUtc;
+        TimeSpan sampleDuration;
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT SampleStartedAtUtc, SampleDurationTicks
+                FROM WindowsPerformanceTopProcessSnapshots
+                WHERE ObservationId = $observation;
+                """;
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                throw new InvestigationPersistenceException(
+                    "The persisted top-process observation is incomplete.");
+            }
+
+            sampleStartedAtUtc = ParseDate(reader.GetString(0));
+            sampleDuration = ReadSampleDuration(reader.GetInt64(1));
+        }
+
+        var cpuProcesses = ReadTopProcessEntries(connection, observationId, "cpu");
+        var memoryProcesses = ReadTopProcessEntries(connection, observationId, "memory");
+        return new WindowsPerformanceTopProcesses(
+            sampleStartedAtUtc,
+            sampleDuration,
+            cpuProcesses,
+            memoryProcesses);
+    }
+
+    private static IReadOnlyList<WindowsPerformanceProcess> ReadTopProcessEntries(
+        SqliteConnection connection,
+        long observationId,
+        string rankingKind)
+    {
+        var processes = new List<WindowsPerformanceProcess>();
+        var processIds = new HashSet<int>();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT RankingOrdinal, ProcessId, ProcessName, CpuUtilizationPercent, WorkingSetBytes
+            FROM WindowsPerformanceTopProcessEntries
+            WHERE ObservationId = $observation AND RankingKind = $ranking
+            ORDER BY RankingOrdinal;
+            """;
+        SqliteDatabase.AddParameter(command, "$observation", observationId);
+        SqliteDatabase.AddParameter(command, "$ranking", rankingKind);
+        using var reader = command.ExecuteReader();
+        var expectedOrdinal = 0;
+        while (reader.Read())
+        {
+            if (reader.GetInt32(0) != expectedOrdinal)
+            {
+                throw new InvestigationPersistenceException(
+                    "The persisted top-process ranking has an invalid ordinal.");
+            }
+
+            var processId = reader.GetInt32(1);
+            var processName = reader.GetString(2);
+            var cpu = reader.GetDouble(3);
+            var workingSet = ReadUnsignedInteger(reader.GetInt64(4), "process working-set bytes");
+            if (processId <= 0 || string.IsNullOrWhiteSpace(processName) || !processIds.Add(processId))
+            {
+                throw new InvestigationPersistenceException(
+                    "The persisted top-process ranking contains invalid identity data.");
+            }
+
+            ValidatePercentage(cpu, "process CPU utilization");
+            processes.Add(new WindowsPerformanceProcess(processId, processName, cpu, workingSet));
+            expectedOrdinal++;
+        }
+
+        if (processes.Count > 10)
+        {
+            throw new InvestigationPersistenceException(
+                "The persisted top-process ranking exceeds the supported bound.");
+        }
+
+        return processes;
+    }
+
+    private static TimeSpan ReadSampleDuration(long ticks)
+    {
+        if (ticks <= 0)
+        {
+            throw new InvestigationPersistenceException("The persisted performance sample duration is invalid.");
+        }
+
+        var duration = TimeSpan.FromTicks(ticks);
+        if (duration > TimeSpan.FromSeconds(5))
+        {
+            throw new InvestigationPersistenceException("The persisted performance sample duration is too large.");
+        }
+
+        return duration;
+    }
+
+    private static ulong ReadUnsignedInteger(long value, string name)
+    {
+        if (value < 0)
+        {
+            throw new InvestigationPersistenceException($"The persisted {name} value is negative.");
+        }
+
+        return (ulong)value;
     }
 
     private static InvestigationOutcome? CreateOutcome(

@@ -23,7 +23,11 @@ public partial class App : Application
         _loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
         _logger = _loggerFactory.CreateLogger<App>();
         var observationRegistry = new ObservationRegistry(
-            [new WindowsSystemInfoObservationTool()]);
+            [
+                new WindowsSystemInfoObservationTool(),
+                new WindowsPerformanceSystemObservationTool(),
+                new WindowsPerformanceTopProcessesObservationTool()
+            ]);
         _observationRuntime = new ObservationRuntime(
             observationRegistry,
             exception => _logger.LogError(exception, "Observation tool execution failed."));

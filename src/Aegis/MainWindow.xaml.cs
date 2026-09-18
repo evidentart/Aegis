@@ -85,6 +85,7 @@ public sealed partial class MainWindow : Window
         {
             _selectedInvestigation = null;
             ObservationListView.ItemsSource = null;
+            ObservationDetailTextBlock.Text = string.Empty;
             CreateBaselineButton.IsEnabled = false;
             HistoryDetailTextBlock.Text = string.Empty;
             return;
@@ -95,6 +96,7 @@ public sealed partial class MainWindow : Window
             _selectedInvestigation = await _historyService.GetAsync(summary.InvestigationId);
             if (_selectedInvestigation is null)
             {
+                ObservationDetailTextBlock.Text = string.Empty;
                 HistoryDetailTextBlock.Text = "Investigation details are unavailable.";
                 return;
             }
@@ -114,22 +116,34 @@ public sealed partial class MainWindow : Window
                 $"Outcome: {outcome}{Environment.NewLine}" +
                 $"Plans:{Environment.NewLine}{plans}";
             ObservationListView.ItemsSource = investigation.StepExecutions;
+            ObservationDetailTextBlock.Text = string.Empty;
             CreateBaselineButton.IsEnabled = false;
             BaselineStatusTextBlock.Text = string.Empty;
         }
         catch (Exception exception)
         {
             _logger.LogError(exception, "Investigation history could not be loaded.");
+            ObservationDetailTextBlock.Text = string.Empty;
             HistoryDetailTextBlock.Text = "Investigation details are unavailable.";
         }
     }
 
     private void ObservationListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (ObservationListView.SelectedItem is not InvestigationStepExecution execution ||
+            execution.Result is null)
+        {
+            ObservationDetailTextBlock.Text = string.Empty;
+            CreateBaselineButton.IsEnabled = false;
+            return;
+        }
+
+        ObservationDetailTextBlock.Text = FormatObservation(execution.Result);
         CreateBaselineButton.IsEnabled =
-            _selectedInvestigation is not null &&
-            ObservationListView.SelectedItem is InvestigationStepExecution execution &&
-            execution.Result is not null;
+            execution.Status == InvestigationStepStatus.Completed &&
+            execution.Result.Status == ObservationStatus.Succeeded &&
+            string.Equals(execution.ToolId, WindowsSystemInfoObservationTool.ToolId, StringComparison.Ordinal) &&
+            execution.Result.Data is WindowsSystemInfo;
     }
 
     private void BaselineListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -186,5 +200,39 @@ public sealed partial class MainWindow : Window
     private async Task RefreshBaselinesAsync()
     {
         BaselineListView.ItemsSource = await _baselineService.ListAsync();
+    }
+
+    private static string FormatObservation(ObservationResult result) => result.Data switch
+    {
+        WindowsSystemInfo data =>
+            $"System: {data.Platform} {data.OsVersion} build {data.Build?.ToString() ?? "unknown"}, {data.Architecture}",
+        WindowsPerformanceSystem data =>
+            $"System performance at {result.ObservedAtUtc.LocalDateTime:g}: CPU {data.CpuUtilizationPercent:F1}%, " +
+            $"memory {data.MemoryLoadPercent}% ({FormatBytes(data.PhysicalMemoryAvailableBytes)} available of " +
+            $"{FormatBytes(data.PhysicalMemoryTotalBytes)}), sample {data.SampleDuration.TotalMilliseconds:F0} ms.",
+        WindowsPerformanceTopProcesses data =>
+            $"Top accessible processes at {result.ObservedAtUtc.LocalDateTime:g}, sample " +
+            $"{data.SampleDuration.TotalMilliseconds:F0} ms. CPU: " +
+            string.Join(", ", data.TopCpuProcesses.Select(FormatProcess)) + ". Memory: " +
+            string.Join(", ", data.TopMemoryProcesses.Select(FormatProcess)) + ".",
+        _ => "The observation returned no displayable typed details."
+    };
+
+    private static string FormatProcess(WindowsPerformanceProcess process) =>
+        $"{process.ProcessName} (PID {process.ProcessId}, CPU {process.CpuUtilizationPercent:F1}%, " +
+        $"working set {FormatBytes(process.WorkingSetBytes)})";
+
+    private static string FormatBytes(ulong bytes)
+    {
+        const double kilobyte = 1024;
+        const double megabyte = kilobyte * 1024;
+        const double gigabyte = megabyte * 1024;
+        return bytes switch
+        {
+            >= (ulong)gigabyte => $"{bytes / gigabyte:F1} GB",
+            >= (ulong)megabyte => $"{bytes / megabyte:F1} MB",
+            >= (ulong)kilobyte => $"{bytes / kilobyte:F1} KB",
+            _ => $"{bytes} B"
+        };
     }
 }
