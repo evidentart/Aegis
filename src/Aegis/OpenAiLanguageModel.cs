@@ -138,8 +138,97 @@ internal static class OpenAiDecisionParser
         JsonElement root,
         IReadOnlySet<string> propertyNames)
     {
-        EnsureProperties(propertyNames, "kind", "answer");
-        return new FinalAnswerDecision(ReadRequiredString(root, "answer"));
+        EnsureProperties(
+            propertyNames,
+            "kind",
+            "summary",
+            "observed_facts",
+            "conclusions",
+            "hypotheses",
+            "uncertainties",
+            "recommendations");
+
+        var report = new InvestigationReport(
+            ReadRequiredString(root, "summary"),
+            ParseEvidenceStatements(root, "observed_facts"),
+            ParseEvidenceStatements(root, "conclusions"),
+            ParseEvidenceStatements(root, "hypotheses"),
+            ParseTextArray(root, "uncertainties"),
+            ParseTextArray(root, "recommendations"));
+        InvestigationReportValidator.ValidateShape(report);
+        return new FinalAnswerDecision(report);
+    }
+
+    private static IReadOnlyList<EvidenceStatement> ParseEvidenceStatements(
+        JsonElement root,
+        string propertyName)
+    {
+        var property = ReadRequiredArray(root, propertyName);
+        var statements = new List<EvidenceStatement>();
+        foreach (var statementProperty in property.EnumerateArray())
+        {
+            if (statementProperty.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException("Each report evidence statement must be an object.");
+            }
+
+            var statementProperties = statementProperty.EnumerateObject().ToArray();
+            var statementPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in statementProperties)
+            {
+                if (!statementPropertyNames.Add(item.Name))
+                {
+                    throw new InvalidOperationException("A report evidence statement contains duplicate properties.");
+                }
+            }
+
+            EnsureProperties(statementPropertyNames, "text", "evidence_step_ids");
+            var evidenceStepIds = ParseTextArray(statementProperty, "evidence_step_ids");
+            statements.Add(new EvidenceStatement(
+                ReadRequiredString(statementProperty, "text"),
+                evidenceStepIds));
+        }
+
+        return statements.ToArray();
+    }
+
+    private static IReadOnlyList<string> ParseTextArray(
+        JsonElement root,
+        string propertyName) =>
+        ReadRequiredArray(root, propertyName)
+            .EnumerateArray()
+            .Select(item =>
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                {
+                    throw new InvalidOperationException(
+                        $"The report property '{propertyName}' must contain only strings.");
+                }
+
+                return ReadStringValue(item, propertyName);
+            })
+            .ToArray();
+
+    private static JsonElement ReadRequiredArray(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException($"The report property '{propertyName}' must be an array.");
+        }
+
+        return property;
+    }
+
+    private static string ReadStringValue(JsonElement value, string propertyName)
+    {
+        var text = value.GetString();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            throw new InvalidOperationException($"The report property '{propertyName}' cannot contain empty strings.");
+        }
+
+        return text;
     }
 
     private static AgentDecision ParseInvestigationPlan(

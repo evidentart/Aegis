@@ -60,7 +60,7 @@ public sealed class SqliteDatabase
             var version = Convert.ToInt32(
                 ExecuteScalar(connection, transaction, "SELECT COALESCE(MAX(Version), 0) FROM SchemaVersions"),
                 CultureInfo.InvariantCulture);
-            if (version > 3)
+            if (version > 4)
             {
                 throw new InvalidOperationException($"The database schema version '{version}' is newer than this application supports.");
             }
@@ -240,6 +240,42 @@ public sealed class SqliteDatabase
                     """);
             }
 
+            if (version < 4)
+            {
+                ExecuteNonQuery(connection, transaction, """
+                    CREATE TABLE InvestigationReportStatements (
+                        InvestigationId TEXT NOT NULL,
+                        SectionKind TEXT NOT NULL,
+                        StatementOrdinal INTEGER NOT NULL,
+                        Text TEXT NOT NULL,
+                        PRIMARY KEY (InvestigationId, SectionKind, StatementOrdinal),
+                        CHECK (SectionKind IN ('ObservedFacts', 'Conclusions', 'Hypotheses', 'Uncertainties', 'Recommendations')),
+                        CHECK (StatementOrdinal >= 0 AND StatementOrdinal < 8),
+                        CHECK (length(Text) > 0),
+                        FOREIGN KEY (InvestigationId) REFERENCES Investigations(InvestigationId)
+                    );
+                    CREATE TABLE InvestigationReportEvidenceReferences (
+                        InvestigationId TEXT NOT NULL,
+                        SectionKind TEXT NOT NULL,
+                        StatementOrdinal INTEGER NOT NULL,
+                        ReferenceOrdinal INTEGER NOT NULL,
+                        StepId TEXT NOT NULL,
+                        PRIMARY KEY (InvestigationId, SectionKind, StatementOrdinal, ReferenceOrdinal),
+                        CHECK (SectionKind IN ('ObservedFacts', 'Conclusions', 'Hypotheses')),
+                        CHECK (StatementOrdinal >= 0 AND StatementOrdinal < 8),
+                        CHECK (ReferenceOrdinal >= 0 AND ReferenceOrdinal < 4),
+                        CHECK (length(StepId) > 0),
+                        FOREIGN KEY (InvestigationId, SectionKind, StatementOrdinal)
+                            REFERENCES InvestigationReportStatements(InvestigationId, SectionKind, StatementOrdinal)
+                    );
+                    CREATE INDEX IX_InvestigationReportStatements_Investigation
+                        ON InvestigationReportStatements(InvestigationId, SectionKind, StatementOrdinal);
+                    CREATE INDEX IX_InvestigationReportEvidenceReferences_Investigation
+                        ON InvestigationReportEvidenceReferences(InvestigationId, SectionKind, StatementOrdinal, ReferenceOrdinal);
+                    INSERT INTO SchemaVersions (Version) VALUES (4);
+                    """);
+            }
+
             transaction.Commit();
             _initialized = true;
         }
@@ -282,7 +318,23 @@ public sealed class SqliteDatabase
 public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBaselineStore
 {
     private const string DateFormat = "O";
+    private const string ObservedFactsSection = "ObservedFacts";
+    private const string ConclusionsSection = "Conclusions";
+    private const string HypothesesSection = "Hypotheses";
+    private const string UncertaintiesSection = "Uncertainties";
+    private const string RecommendationsSection = "Recommendations";
     private readonly SqliteDatabase _database;
+
+    private sealed record PersistedReportStatement(
+        string SectionKind,
+        int StatementOrdinal,
+        string Text);
+
+    private sealed record PersistedReportReference(
+        string SectionKind,
+        int StatementOrdinal,
+        int ReferenceOrdinal,
+        string StepId);
 
     public SqliteInvestigationStore(SqliteDatabase database)
     {
@@ -570,6 +622,17 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
         SqliteDatabase.AddParameter(command, "$running", (int)InvestigationLifecycleStatus.Running);
         var committed = command.ExecuteNonQuery() == 1;
+        if (committed && outcome.Report is not null)
+        {
+            if (!string.Equals(outcome.FinalAnswer, outcome.Report.Summary, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The persisted final answer must match the structured report summary.");
+            }
+
+            InsertReport(connection, transaction, investigationId, outcome.Report);
+        }
+
         transaction.Commit();
         return Task.FromResult(committed);
     }
@@ -639,6 +702,14 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
             completedAtUtc = reader.IsDBNull(4) ? null : ParseDate(reader.GetString(4));
             lifecycleStatus = (InvestigationLifecycleStatus)reader.GetInt32(5);
             outcome = CreateOutcome(reader, 6, 7, 8);
+        }
+
+        if (outcome is not null)
+        {
+            outcome = outcome with
+            {
+                Report = ReadReport(connection, investigationId, outcome.FinalAnswer)
+            };
         }
 
         investigation = new Investigation(
@@ -866,6 +937,291 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         }
 
         return observationId;
+    }
+
+    private static void InsertReport(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid investigationId,
+        InvestigationReport report)
+    {
+        var evidenceStepIds = ReadCollectedEvidenceStepIds(connection, transaction, investigationId);
+        InvestigationReportValidator.Validate(report, evidenceStepIds);
+
+        var sections = new[]
+        {
+            (ObservedFactsSection, report.ObservedFacts),
+            (ConclusionsSection, report.Conclusions),
+            (HypothesesSection, report.Hypotheses),
+            (UncertaintiesSection, report.Uncertainties.Select(text => new EvidenceStatement(text, Array.Empty<string>())).ToArray()),
+            (RecommendationsSection, report.Recommendations.Select(text => new EvidenceStatement(text, Array.Empty<string>())).ToArray())
+        };
+
+        foreach (var (sectionKind, statements) in sections)
+        {
+            for (var statementOrdinal = 0; statementOrdinal < statements.Count; statementOrdinal++)
+            {
+                var statement = statements[statementOrdinal];
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = """
+                        INSERT INTO InvestigationReportStatements
+                            (InvestigationId, SectionKind, StatementOrdinal, Text)
+                        VALUES ($investigation, $section, $ordinal, $text);
+                        """;
+                    SqliteDatabase.AddParameter(command, "$investigation", investigationId.ToString("D"));
+                    SqliteDatabase.AddParameter(command, "$section", sectionKind);
+                    SqliteDatabase.AddParameter(command, "$ordinal", statementOrdinal);
+                    SqliteDatabase.AddParameter(command, "$text", statement.Text);
+                    command.ExecuteNonQuery();
+                }
+
+                for (var referenceOrdinal = 0; referenceOrdinal < statement.EvidenceStepIds.Count; referenceOrdinal++)
+                {
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = """
+                        INSERT INTO InvestigationReportEvidenceReferences
+                            (InvestigationId, SectionKind, StatementOrdinal, ReferenceOrdinal, StepId)
+                        VALUES ($investigation, $section, $ordinal, $reference, $step);
+                        """;
+                    SqliteDatabase.AddParameter(command, "$investigation", investigationId.ToString("D"));
+                    SqliteDatabase.AddParameter(command, "$section", sectionKind);
+                    SqliteDatabase.AddParameter(command, "$ordinal", statementOrdinal);
+                    SqliteDatabase.AddParameter(command, "$reference", referenceOrdinal);
+                    SqliteDatabase.AddParameter(command, "$step", statement.EvidenceStepIds[referenceOrdinal]);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+    }
+
+    private static InvestigationReport? ReadReport(
+        SqliteConnection connection,
+        Guid investigationId,
+        string? finalAnswer)
+    {
+        var statements = new List<PersistedReportStatement>();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT SectionKind, StatementOrdinal, Text
+                FROM InvestigationReportStatements
+                WHERE InvestigationId = $investigation
+                ORDER BY SectionKind, StatementOrdinal;
+                """;
+            SqliteDatabase.AddParameter(command, "$investigation", investigationId.ToString("D"));
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                statements.Add(new PersistedReportStatement(
+                    reader.GetString(0),
+                    reader.GetInt32(1),
+                    reader.GetString(2)));
+            }
+        }
+
+        var references = new List<PersistedReportReference>();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT SectionKind, StatementOrdinal, ReferenceOrdinal, StepId
+                FROM InvestigationReportEvidenceReferences
+                WHERE InvestigationId = $investigation
+                ORDER BY SectionKind, StatementOrdinal, ReferenceOrdinal;
+                """;
+            SqliteDatabase.AddParameter(command, "$investigation", investigationId.ToString("D"));
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                references.Add(new PersistedReportReference(
+                    reader.GetString(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2),
+                    reader.GetString(3)));
+            }
+        }
+
+        if (finalAnswer is null)
+        {
+            if (statements.Count > 0 || references.Count > 0)
+            {
+                throw new InvestigationPersistenceException(
+                    "Structured report rows exist without a persisted final answer.");
+            }
+
+            return null;
+        }
+
+        if (statements.Count == 0)
+        {
+            if (references.Count > 0)
+            {
+                throw new InvestigationPersistenceException(
+                    "Report evidence references exist without report statements.");
+            }
+
+            return InvestigationReport.FromLegacySummary(finalAnswer);
+        }
+
+        foreach (var statement in statements)
+        {
+            if (!IsSupportedSection(statement.SectionKind))
+            {
+                throw new InvestigationPersistenceException(
+                    $"The persisted report contains an unsupported section kind '{statement.SectionKind}'.");
+            }
+        }
+
+        foreach (var reference in references)
+        {
+            if (!IsEvidenceSection(reference.SectionKind))
+            {
+                throw new InvestigationPersistenceException(
+                    "The persisted report contains an evidence reference for a section that does not support references.");
+            }
+
+            if (!statements.Any(statement =>
+                    string.Equals(statement.SectionKind, reference.SectionKind, StringComparison.Ordinal) &&
+                    statement.StatementOrdinal == reference.StatementOrdinal))
+            {
+                throw new InvestigationPersistenceException(
+                    "The persisted report contains an evidence reference for a missing statement.");
+            }
+        }
+
+        var referencesByStatement = references
+            .GroupBy(reference => (reference.SectionKind, reference.StatementOrdinal))
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderBy(reference => reference.ReferenceOrdinal).ToArray());
+        var observedFacts = ReadEvidenceStatements(statements, referencesByStatement, ObservedFactsSection);
+        var conclusions = ReadEvidenceStatements(statements, referencesByStatement, ConclusionsSection);
+        var hypotheses = ReadEvidenceStatements(statements, referencesByStatement, HypothesesSection);
+        var uncertainties = ReadTextStatements(statements, UncertaintiesSection);
+        var recommendations = ReadTextStatements(statements, RecommendationsSection);
+        var report = new InvestigationReport(
+            finalAnswer,
+            observedFacts,
+            conclusions,
+            hypotheses,
+            uncertainties,
+            recommendations);
+
+        try
+        {
+            InvestigationReportValidator.Validate(
+                report,
+                ReadCollectedEvidenceStepIds(connection, transaction: null, investigationId));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentNullException)
+        {
+            throw new InvestigationPersistenceException(
+                "The persisted investigation report is invalid.",
+                exception);
+        }
+
+        return report;
+    }
+
+    private static IReadOnlyList<EvidenceStatement> ReadEvidenceStatements(
+        IReadOnlyList<PersistedReportStatement> statements,
+        IReadOnlyDictionary<(string SectionKind, int StatementOrdinal), PersistedReportReference[]> referencesByStatement,
+        string sectionKind)
+    {
+        var sectionStatements = statements
+            .Where(statement => string.Equals(statement.SectionKind, sectionKind, StringComparison.Ordinal))
+            .OrderBy(statement => statement.StatementOrdinal)
+            .ToArray();
+        ValidateStatementOrdinals(sectionStatements, sectionKind);
+        var result = new List<EvidenceStatement>();
+        foreach (var statement in sectionStatements)
+        {
+            if (!referencesByStatement.TryGetValue((sectionKind, statement.StatementOrdinal), out var references))
+            {
+                throw new InvestigationPersistenceException(
+                    $"The persisted {sectionKind} statement has no evidence references.");
+            }
+
+            ValidateReferenceOrdinals(references, sectionKind, statement.StatementOrdinal);
+            result.Add(new EvidenceStatement(
+                statement.Text,
+                references.Select(reference => reference.StepId).ToArray()));
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<string> ReadTextStatements(
+        IReadOnlyList<PersistedReportStatement> statements,
+        string sectionKind)
+    {
+        var sectionStatements = statements
+            .Where(statement => string.Equals(statement.SectionKind, sectionKind, StringComparison.Ordinal))
+            .OrderBy(statement => statement.StatementOrdinal)
+            .ToArray();
+        ValidateStatementOrdinals(sectionStatements, sectionKind);
+        return sectionStatements.Select(statement => statement.Text).ToArray();
+    }
+
+    private static void ValidateStatementOrdinals(
+        IReadOnlyList<PersistedReportStatement> statements,
+        string sectionKind)
+    {
+        for (var index = 0; index < statements.Count; index++)
+        {
+            if (statements[index].StatementOrdinal != index)
+            {
+                throw new InvestigationPersistenceException(
+                    $"The persisted {sectionKind} report statements have invalid ordinals.");
+            }
+        }
+    }
+
+    private static void ValidateReferenceOrdinals(
+        IReadOnlyList<PersistedReportReference> references,
+        string sectionKind,
+        int statementOrdinal)
+    {
+        for (var index = 0; index < references.Count; index++)
+        {
+            if (references[index].ReferenceOrdinal != index)
+            {
+                throw new InvestigationPersistenceException(
+                    $"The persisted {sectionKind} statement {statementOrdinal} has invalid evidence-reference ordinals.");
+            }
+        }
+    }
+
+    private static bool IsSupportedSection(string sectionKind) =>
+        sectionKind is ObservedFactsSection or ConclusionsSection or HypothesesSection or
+            UncertaintiesSection or RecommendationsSection;
+
+    private static bool IsEvidenceSection(string sectionKind) =>
+        sectionKind is ObservedFactsSection or ConclusionsSection or HypothesesSection;
+
+    private static IReadOnlySet<string> ReadCollectedEvidenceStepIds(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        Guid investigationId)
+    {
+        var stepIds = new HashSet<string>(StringComparer.Ordinal);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT StepId
+            FROM StepExecutions
+            WHERE InvestigationId = $investigation AND ObservationId IS NOT NULL;
+            """;
+        SqliteDatabase.AddParameter(command, "$investigation", investigationId.ToString("D"));
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            stepIds.Add(reader.GetString(0));
+        }
+
+        return stepIds;
     }
 
     private static void ValidateObservationData(ObservationResult result)

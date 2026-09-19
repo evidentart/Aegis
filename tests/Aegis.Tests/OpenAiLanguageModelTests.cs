@@ -9,7 +9,7 @@ public sealed class OpenAiLanguageModelTests
     [Fact]
     public async Task MapsProviderNeutralMessagesAndConvertsFinalAnswer()
     {
-        var client = new FakeOpenAiChatClient("{\"kind\":\"final_answer\",\"answer\":\"The answer.\"}");
+        var client = new FakeOpenAiChatClient("{\"kind\":\"final_answer\",\"summary\":\"The answer.\",\"observed_facts\":[],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[],\"recommendations\":[]}");
         var model = new OpenAiLanguageModel(client);
 
         var response = await model.CompleteAsync(CreateRequest(
@@ -18,7 +18,13 @@ public sealed class OpenAiLanguageModelTests
             new LanguageModelMessage(LanguageModelMessageRole.Assistant, "Prior decision."),
             new LanguageModelMessage(LanguageModelMessageRole.Observation, "Evidence.")));
 
-        Assert.Equal(new FinalAnswerDecision("The answer."), response);
+        var finalDecision = Assert.IsType<FinalAnswerDecision>(response);
+        Assert.Equal("The answer.", finalDecision.Report.Summary);
+        Assert.Empty(finalDecision.Report.ObservedFacts);
+        Assert.Empty(finalDecision.Report.Conclusions);
+        Assert.Empty(finalDecision.Report.Hypotheses);
+        Assert.Empty(finalDecision.Report.Uncertainties);
+        Assert.Empty(finalDecision.Report.Recommendations);
         Assert.Collection(
             client.Messages,
             message =>
@@ -41,6 +47,46 @@ public sealed class OpenAiLanguageModelTests
                 Assert.Equal(LanguageModelMessageRole.Observation, message.Role);
                 Assert.Equal("Evidence.", message.Content);
             });
+    }
+
+    [Fact]
+    public async Task ParsesStructuredFinalAnswerWithEvidenceReferences()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"kind\":\"final_answer\",\"summary\":\"Summary\",\"observed_facts\":[{\"text\":\"CPU was observed\",\"evidence_step_ids\":[\"perf-system-1\"]}],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[\"The sample was bounded.\"],\"recommendations\":[\"Collect another sample if needed.\"]}"));
+
+        var decision = Assert.IsType<FinalAnswerDecision>(await model.CompleteAsync(
+            CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
+
+        Assert.Equal("Summary", decision.Report.Summary);
+        var fact = Assert.Single(decision.Report.ObservedFacts);
+        Assert.Equal("CPU was observed", fact.Text);
+        Assert.Equal("perf-system-1", Assert.Single(fact.EvidenceStepIds));
+        Assert.Equal("The sample was bounded.", Assert.Single(decision.Report.Uncertainties));
+    }
+
+    [Fact]
+    public async Task RejectsStructuredFinalAnswerWithUnsupportedProperty()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"kind\":\"final_answer\",\"summary\":\"Summary\",\"observed_facts\":[],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[],\"recommendations\":[],\"extra\":\"not allowed\"}"));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
+
+        Assert.Equal("The language model returned an invalid decision.", exception.Message);
+    }
+
+    [Fact]
+    public async Task RejectsStructuredFinalAnswerMissingRequiredReportField()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"kind\":\"final_answer\",\"summary\":\"Summary\",\"observed_facts\":[],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[]}"));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(CreateRequest(new LanguageModelMessage(LanguageModelMessageRole.User, "Question."))));
+
+        Assert.Equal("The language model returned an invalid decision.", exception.Message);
     }
 
     [Fact]
@@ -108,7 +154,9 @@ public sealed class OpenAiLanguageModelTests
     [InlineData("not json")]
     [InlineData("[{}]")]
     [InlineData("{\"kind\":\"unknown\",\"answer\":\"text\"}")]
+    [InlineData("{\"kind\":\"final_answer\",\"answer\":\"text\"}")]
     [InlineData("{\"kind\":\"final_answer\",\"answer\":\"text\",\"arguments\":{}}")]
+    [InlineData("{\"kind\":\"final_answer\",\"summary\":\"text\",\"observed_facts\":[{\"text\":\"fact\",\"evidence_step_ids\":[]}],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[],\"recommendations\":[]}")]
     [InlineData("```json\n{\"kind\":\"final_answer\",\"answer\":\"text\"}\n```")]
     public async Task RejectsMalformedProviderDecisions(string content)
     {

@@ -40,7 +40,7 @@ public sealed partial class MainWindow : Window
         try
         {
             var response = await _investigationService.InvestigateAsync(QuestionTextBox.Text);
-            AnswerTextBlock.Text = response.Answer;
+            AnswerTextBlock.Text = FormatReport(response.Report);
             AnswerTextBlock.Visibility = Visibility.Visible;
             StatusTextBlock.Text = $"Investigation {response.InvestigationId} completed.";
         }
@@ -102,9 +102,11 @@ public sealed partial class MainWindow : Window
             }
 
             var investigation = _selectedInvestigation.Investigation;
-            var outcome = investigation.Outcome?.FinalAnswer ??
-                          investigation.Outcome?.FailureMessage ??
-                          "No final outcome was recorded.";
+            var outcome = investigation.Outcome?.Report is { } report
+                ? FormatReport(report)
+                : investigation.Outcome?.FailureMessage ??
+                  investigation.Outcome?.FinalAnswer ??
+                  "No final outcome was recorded.";
             var plans = string.Join(
                 Environment.NewLine,
                 investigation.Plans.Select(plan =>
@@ -113,7 +115,7 @@ public sealed partial class MainWindow : Window
             HistoryDetailTextBlock.Text =
                 $"{investigation.LifecycleStatus} · {investigation.CreatedAtUtc.LocalDateTime:g}{Environment.NewLine}" +
                 $"Question: {investigation.Question}{Environment.NewLine}" +
-                $"Outcome: {outcome}{Environment.NewLine}" +
+                $"Outcome:{Environment.NewLine}{outcome}{Environment.NewLine}" +
                 $"Plans:{Environment.NewLine}{plans}";
             ObservationListView.ItemsSource = investigation.StepExecutions;
             ObservationDetailTextBlock.Text = string.Empty;
@@ -217,6 +219,53 @@ public sealed partial class MainWindow : Window
             string.Join(", ", data.TopMemoryProcesses.Select(FormatProcess)) + ".",
         _ => "The observation returned no displayable typed details."
     };
+
+    private static string FormatReport(InvestigationReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        var lines = new List<string> { $"Summary: {report.Summary}" };
+        AppendEvidenceStatements(lines, "Observed facts", report.ObservedFacts);
+        AppendEvidenceStatements(lines, "Conclusions", report.Conclusions);
+        AppendEvidenceStatements(lines, "Hypotheses", report.Hypotheses);
+        AppendTextStatements(lines, "Uncertainty", report.Uncertainties);
+        AppendTextStatements(lines, "Recommendations", report.Recommendations);
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void AppendEvidenceStatements(
+        ICollection<string> lines,
+        string heading,
+        IReadOnlyList<EvidenceStatement> statements)
+    {
+        if (statements.Count == 0)
+        {
+            return;
+        }
+
+        lines.Add($"{heading}:");
+        foreach (var statement in statements)
+        {
+            lines.Add($"- {statement.Text}");
+            lines.Add($"  Evidence: {string.Join(", ", statement.EvidenceStepIds)}");
+        }
+    }
+
+    private static void AppendTextStatements(
+        ICollection<string> lines,
+        string heading,
+        IReadOnlyList<string> statements)
+    {
+        if (statements.Count == 0)
+        {
+            return;
+        }
+
+        lines.Add($"{heading}:");
+        foreach (var statement in statements)
+        {
+            lines.Add($"- {statement}");
+        }
+    }
 
     private static string FormatProcess(WindowsPerformanceProcess process) =>
         $"{process.ProcessName} (PID {process.ProcessId}, CPU {process.CpuUtilizationPercent:F1}%, " +

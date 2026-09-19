@@ -97,11 +97,13 @@ public sealed class AgentRuntime
                 state = await ExecutePlanAsync(state, revisedPlan, cancellationToken);
             }
 
-            var answer = await FinalizeAsync(
+            var report = await FinalizeAsync(
                 state with { ExecutionPhase = InvestigationExecutionPhase.Finalizing },
                 cancellationToken);
             var completedAtUtc = DateTimeOffset.UtcNow;
-            var completedOutcome = new InvestigationOutcome(FinalAnswer: answer);
+            var completedOutcome = new InvestigationOutcome(
+                FinalAnswer: report.Summary,
+                Report: report);
             state = state with
             {
                 CompletedAtUtc = completedAtUtc,
@@ -116,7 +118,7 @@ public sealed class AgentRuntime
                 completedOutcome,
                 completedAtUtc);
 
-            return new AgentRunResult(investigationId, answer);
+            return new AgentRunResult(investigationId, report);
         }
         catch (OperationCanceledException)
         {
@@ -368,7 +370,7 @@ public sealed class AgentRuntime
         return state;
     }
 
-    private async Task<string> FinalizeAsync(
+    private async Task<InvestigationReport> FinalizeAsync(
         InvestigationState state,
         CancellationToken cancellationToken)
     {
@@ -386,12 +388,25 @@ public sealed class AgentRuntime
             throw new AgentRuntimeException("The language model did not return a final answer.");
         }
 
-        if (string.IsNullOrWhiteSpace(finalAnswer.Answer))
+        if (finalAnswer.Report is null)
         {
-            throw new AgentRuntimeException("The language model returned an empty final answer.");
+            throw new AgentRuntimeException("The language model returned no investigation report.");
         }
 
-        return finalAnswer.Answer.Trim();
+        try
+        {
+            InvestigationReportValidator.Validate(
+                finalAnswer.Report,
+                state.Evidence.Select(evidence => evidence.StepId).ToHashSet(StringComparer.Ordinal));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentNullException)
+        {
+            throw new AgentRuntimeException(
+                "The language model returned an invalid investigation report.",
+                exception);
+        }
+
+        return finalAnswer.Report;
     }
 
     private async Task CommitTerminalOutcomeAsync(

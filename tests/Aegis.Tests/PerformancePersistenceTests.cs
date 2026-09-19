@@ -9,6 +9,202 @@ namespace Aegis.Tests;
 public sealed class PerformancePersistenceTests
 {
     [Fact]
+    public async Task PersistsAndReconstructsStructuredInvestigationReport()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("step-1", WindowsSystemInfoObservationTool.ToolId));
+        var systemInfo = new WindowsSystemInfo("Windows", "10.0", 26100, "X64");
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution("step-1", WindowsSystemInfoObservationTool.ToolId, systemInfo));
+        var report = new InvestigationReport(
+            "The system was observed.",
+            [new EvidenceStatement("Windows was observed.", ["step-1"])],
+            [new EvidenceStatement("The observation supports this interpretation.", ["step-1"])],
+            [],
+            ["This is a point-in-time observation."],
+            ["Review the evidence before taking action."]);
+
+        Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: report.Summary, Report: report),
+            DateTimeOffset.UtcNow));
+
+        var details = await fixture.Store.GetAsync(fixture.InvestigationId);
+
+        Assert.Equal(report.Summary, details!.Investigation.Outcome!.Report!.Summary);
+        Assert.Equal("step-1", Assert.Single(details.Investigation.Outcome.Report.ObservedFacts).EvidenceStepIds.Single());
+        Assert.Equal("The observation supports this interpretation.",
+            Assert.Single(details.Investigation.Outcome.Report.Conclusions).Text);
+        Assert.Equal(4, fixture.CountRows("InvestigationReportStatements"));
+        Assert.Equal(2, fixture.CountRows("InvestigationReportEvidenceReferences"));
+    }
+
+    [Fact]
+    public async Task LegacyFinalAnswerReconstructsAsSummaryOnlyReport()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("step-1", WindowsSystemInfoObservationTool.ToolId));
+
+        Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "Legacy answer."),
+            DateTimeOffset.UtcNow));
+
+        var report = (await fixture.Store.GetAsync(fixture.InvestigationId))!.Investigation.Outcome!.Report!;
+
+        Assert.Equal("Legacy answer.", report.Summary);
+        Assert.Empty(report.ObservedFacts);
+        Assert.Empty(report.Conclusions);
+        Assert.Empty(report.Hypotheses);
+        Assert.Empty(report.Uncertainties);
+        Assert.Empty(report.Recommendations);
+        Assert.Equal(0, fixture.CountRows("InvestigationReportStatements"));
+    }
+
+    [Fact]
+    public async Task InvalidStructuredReportRollsBackTerminalFinalization()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("step-1", WindowsSystemInfoObservationTool.ToolId));
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "step-1",
+                WindowsSystemInfoObservationTool.ToolId,
+                new WindowsSystemInfo("Windows", "10.0", 26100, "X64")));
+        var invalidReport = new InvestigationReport(
+            "Summary",
+            [new EvidenceStatement("Fact", ["not-collected"])],
+            [],
+            [],
+            [],
+            []);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: invalidReport.Summary, Report: invalidReport),
+            DateTimeOffset.UtcNow));
+
+        var details = await fixture.Store.GetAsync(fixture.InvestigationId);
+        Assert.Equal(InvestigationLifecycleStatus.Running, details!.Investigation.LifecycleStatus);
+        Assert.Null(details.Investigation.Outcome);
+        Assert.Equal(0, fixture.CountRows("InvestigationReportStatements"));
+    }
+
+    [Fact]
+    public async Task RejectsInvalidPersistedReportSectionKind()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("step-1", WindowsSystemInfoObservationTool.ToolId));
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO InvestigationReportStatements
+                (InvestigationId, SectionKind, StatementOrdinal, Text)
+            VALUES ($investigation, 'Invalid', 0, 'unexpected');
+            """;
+        command.Parameters.AddWithValue("$investigation", fixture.InvestigationId.ToString("D"));
+
+        await Assert.ThrowsAsync<SqliteException>(() => command.ExecuteNonQueryAsync());
+    }
+
+    [Fact]
+    public async Task RejectsNonContiguousPersistedReportStatementOrdinals()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("step-1", WindowsSystemInfoObservationTool.ToolId));
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "step-1",
+                WindowsSystemInfoObservationTool.ToolId,
+                new WindowsSystemInfo("Windows", "10.0", 26100, "X64")));
+        var report = new InvestigationReport(
+            "Summary",
+            [new EvidenceStatement("Fact", ["step-1"])],
+            [],
+            [],
+            ["Uncertainty one", "Uncertainty two"],
+            []);
+
+        Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: report.Summary, Report: report),
+            DateTimeOffset.UtcNow));
+
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE InvestigationReportStatements
+                SET StatementOrdinal = 2
+                WHERE InvestigationId = $investigation AND SectionKind = 'Uncertainties'
+                    AND StatementOrdinal = 1;
+                """;
+            command.Parameters.AddWithValue("$investigation", fixture.InvestigationId.ToString("D"));
+            command.ExecuteNonQuery();
+        }
+
+        await Assert.ThrowsAsync<InvestigationPersistenceException>(() => fixture.Store.GetAsync(fixture.InvestigationId));
+    }
+
+    [Fact]
+    public async Task RejectsNonContiguousPersistedEvidenceReferenceOrdinals()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("step-1", WindowsSystemInfoObservationTool.ToolId),
+            ("step-2", WindowsSystemInfoObservationTool.ToolId));
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "step-1",
+                WindowsSystemInfoObservationTool.ToolId,
+                new WindowsSystemInfo("Windows", "10.0", 26100, "X64")));
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "step-2",
+                WindowsSystemInfoObservationTool.ToolId,
+                new WindowsSystemInfo("Windows", "10.0", 26100, "X64")));
+        var report = new InvestigationReport(
+            "Summary",
+            [new EvidenceStatement("Fact", ["step-1", "step-2"])],
+            [],
+            [],
+            [],
+            []);
+
+        Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: report.Summary, Report: report),
+            DateTimeOffset.UtcNow));
+
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE InvestigationReportEvidenceReferences
+                SET ReferenceOrdinal = 2
+                WHERE InvestigationId = $investigation AND SectionKind = 'ObservedFacts'
+                    AND StatementOrdinal = 0 AND ReferenceOrdinal = 1;
+                """;
+            command.Parameters.AddWithValue("$investigation", fixture.InvestigationId.ToString("D"));
+            command.ExecuteNonQuery();
+        }
+
+        await Assert.ThrowsAsync<InvestigationPersistenceException>(() => fixture.Store.GetAsync(fixture.InvestigationId));
+    }
+
+    [Fact]
     public async Task PersistsAndReconstructsTypedPerformanceObservations()
     {
         using var fixture = await CreatePreparedFixtureAsync(
@@ -147,15 +343,18 @@ public sealed class PerformancePersistenceTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
-    public async Task MigratesRealLegacyFixtureToSchemaV3(int legacyVersion)
+    [InlineData(3)]
+    public async Task MigratesRealLegacyFixtureToSchemaV4(int legacyVersion)
     {
         using var fixture = await CreateLegacyFixtureAsync(legacyVersion);
 
         fixture.Store.Initialize();
 
-        Assert.Equal(3, fixture.GetSchemaVersion());
+        Assert.Equal(4, fixture.GetSchemaVersion());
         Assert.True(fixture.HasTable("WindowsPerformanceSystemObservations"));
         Assert.True(fixture.HasTable("WindowsPerformanceTopProcessSnapshots"));
+        Assert.True(fixture.HasTable("InvestigationReportStatements"));
+        Assert.True(fixture.HasTable("InvestigationReportEvidenceReferences"));
         var details = await fixture.Store.GetAsync(fixture.InvestigationId);
 
         var execution = Assert.Single(details!.Investigation.StepExecutions);
@@ -407,7 +606,7 @@ public sealed class PerformancePersistenceTests
                     ON StepExecutions(InvestigationId, PlanSequence, ExecutionId);
                 """);
             Execute(connection, "INSERT INTO SchemaVersions (Version) VALUES (1);");
-            if (version == 2)
+            if (version >= 2)
             {
                 Execute(connection, """
                     DROP INDEX IF EXISTS IX_StepExecutions_Investigation;
@@ -439,6 +638,55 @@ public sealed class PerformancePersistenceTests
                     CREATE INDEX IX_StepExecutions_Investigation
                         ON StepExecutions(InvestigationId, PlanSequence, ExecutionId);
                     INSERT INTO SchemaVersions (Version) VALUES (2);
+                    """);
+            }
+
+            if (version == 3)
+            {
+                Execute(connection, """
+                    CREATE TABLE WindowsPerformanceSystemObservations (
+                        ObservationId INTEGER PRIMARY KEY NOT NULL,
+                        SampleStartedAtUtc TEXT NOT NULL,
+                        SampleDurationTicks INTEGER NOT NULL,
+                        CpuUtilizationPercent REAL NOT NULL,
+                        PhysicalMemoryTotalBytes INTEGER NOT NULL,
+                        PhysicalMemoryAvailableBytes INTEGER NOT NULL,
+                        MemoryLoadPercent INTEGER NOT NULL,
+                        CHECK (SampleDurationTicks > 0),
+                        CHECK (CpuUtilizationPercent >= 0 AND CpuUtilizationPercent <= 100),
+                        CHECK (PhysicalMemoryTotalBytes >= 0),
+                        CHECK (PhysicalMemoryAvailableBytes >= 0),
+                        CHECK (PhysicalMemoryAvailableBytes <= PhysicalMemoryTotalBytes),
+                        CHECK (MemoryLoadPercent >= 0 AND MemoryLoadPercent <= 100),
+                        FOREIGN KEY (ObservationId) REFERENCES Observations(ObservationId)
+                    );
+                    CREATE TABLE WindowsPerformanceTopProcessSnapshots (
+                        ObservationId INTEGER PRIMARY KEY NOT NULL,
+                        SampleStartedAtUtc TEXT NOT NULL,
+                        SampleDurationTicks INTEGER NOT NULL,
+                        CHECK (SampleDurationTicks > 0),
+                        FOREIGN KEY (ObservationId) REFERENCES Observations(ObservationId)
+                    );
+                    CREATE TABLE WindowsPerformanceTopProcessEntries (
+                        ObservationId INTEGER NOT NULL,
+                        RankingKind TEXT NOT NULL,
+                        RankingOrdinal INTEGER NOT NULL,
+                        ProcessId INTEGER NOT NULL,
+                        ProcessName TEXT NOT NULL,
+                        CpuUtilizationPercent REAL NOT NULL,
+                        WorkingSetBytes INTEGER NOT NULL,
+                        CHECK (RankingKind IN ('cpu', 'memory')),
+                        CHECK (RankingOrdinal >= 0 AND RankingOrdinal < 10),
+                        CHECK (ProcessId > 0),
+                        CHECK (length(ProcessName) > 0),
+                        CHECK (CpuUtilizationPercent >= 0 AND CpuUtilizationPercent <= 100),
+                        CHECK (WorkingSetBytes >= 0),
+                        PRIMARY KEY (ObservationId, RankingKind, RankingOrdinal),
+                        FOREIGN KEY (ObservationId) REFERENCES WindowsPerformanceTopProcessSnapshots(ObservationId)
+                    );
+                    CREATE INDEX IX_WindowsPerformanceTopProcessEntries_Observation
+                        ON WindowsPerformanceTopProcessEntries(ObservationId, RankingKind, RankingOrdinal);
+                    INSERT INTO SchemaVersions (Version) VALUES (3);
                     """);
             }
         }

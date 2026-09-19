@@ -26,6 +26,145 @@ public sealed class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task AcceptsEvidenceAttributedFinalReport()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision(CreateReport("step-1")));
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")));
+
+        var result = await runtime.RunAsync("Question");
+
+        Assert.Equal("Summary", result.Report.Summary);
+        var fact = Assert.Single(result.Report.ObservedFacts);
+        Assert.Equal("step-1", Assert.Single(fact.EvidenceStepIds));
+        var finalSystemInstruction = model.Requests.Single().Messages[0].Content;
+        Assert.Contains("observed_facts", finalSystemInstruction);
+        Assert.Contains("evidence_step_ids", finalSystemInstruction);
+        Assert.Contains("structural citations", finalSystemInstruction);
+        Assert.Contains("single performance snapshot cannot prove sustained behavior", finalSystemInstruction);
+        Assert.DoesNotContain("\"answer\"", finalSystemInstruction);
+    }
+
+    [Theory]
+    [InlineData("unknown-step")]
+    [InlineData("")]
+    public async Task RejectsFinalReportWithoutCollectedEvidence(string evidenceStepId)
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var report = CreateReport(evidenceStepId);
+        var model = new FakeLanguageModel(new FinalAnswerDecision(report));
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")));
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+    }
+
+    [Fact]
+    public async Task RejectsDuplicateEvidenceReferences()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision(CreateReport("step-1", "step-1")));
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")));
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+    }
+
+    [Fact]
+    public async Task RejectsObservedFactWithoutEvidenceReferences()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var report = new InvestigationReport(
+            "Summary",
+            [new EvidenceStatement("Observed fact", [])],
+            [],
+            [],
+            [],
+            []);
+        var model = new FakeLanguageModel(new FinalAnswerDecision(report));
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")));
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+    }
+
+    [Fact]
+    public async Task RejectsEvidenceFreeConclusionAndHypothesis()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var report = new InvestigationReport(
+            "Summary",
+            [],
+            [new EvidenceStatement("Conclusion", [])],
+            [new EvidenceStatement("Hypothesis", [])],
+            [],
+            []);
+        var model = new FakeLanguageModel(new FinalAnswerDecision(report));
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")));
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+    }
+
+    [Fact]
+    public async Task RecommendationsRemainTextAndDoNotCreateExecutionPath()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var report = CreateReport("step-1") with
+        {
+            Recommendations = ["Review the accessible evidence."]
+        };
+        var model = new FakeLanguageModel(new FinalAnswerDecision(report));
+        var tool = new FakeObservationTool("tool.one", data: new TestObservationData("observed"));
+        var runtime = CreateRuntime(planner, model, tool);
+
+        var result = await runtime.RunAsync("Question");
+
+        Assert.Equal(["Review the accessible evidence."], result.Report.Recommendations);
+        Assert.Equal(3, tool.InvocationCount);
+    }
+
+    [Fact]
+    public void EnforcesReportSectionAndEvidenceReferenceBounds()
+    {
+        var tooManyRecommendations = new InvestigationReport(
+            "Summary",
+            [],
+            [],
+            [],
+            [],
+            Enumerable.Range(0, InvestigationReportValidator.MaximumEntriesPerSection + 1)
+                .Select(index => $"Recommendation {index}")
+                .ToArray());
+        var tooManyReferences = CreateReport(
+            Enumerable.Range(0, InvestigationReportValidator.MaximumEvidenceReferencesPerStatement + 1)
+                .Select(index => $"step-{index}")
+                .ToArray());
+
+        Assert.Throws<InvalidOperationException>(() =>
+            InvestigationReportValidator.ValidateShape(tooManyRecommendations));
+        Assert.Throws<InvalidOperationException>(() =>
+            InvestigationReportValidator.ValidateShape(tooManyReferences));
+    }
+
+    [Fact]
     public async Task ExecutesOneBoundedAdaptiveCycleWithPriorEvidence()
     {
         var planner = new FakePlanner(
@@ -363,6 +502,34 @@ public sealed class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task InvalidFinalReportNeverCommitsCompletedAndFailsOnce()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var report = new InvestigationReport(
+            "Summary",
+            [new EvidenceStatement("Observed fact", [])],
+            [],
+            [],
+            [],
+            []);
+        var model = new FakeLanguageModel(new FinalAnswerDecision(report));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")),
+            store);
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+
+        Assert.Equal(1, store.TerminalCommitCount);
+        Assert.Equal(1, store.Events.Count(eventName => eventName == "terminal:Failed"));
+        Assert.DoesNotContain("terminal:Completed", store.Events);
+        Assert.Equal("terminal:Failed", store.Events[^1]);
+    }
+
+    [Fact]
     public async Task DoesNotRetryTerminalCommitAndDoesNotReturnAnswerAfterPersistenceFailure()
     {
         var planner = new FakePlanner(
@@ -441,6 +608,15 @@ public sealed class AgentRuntimeTests
         new(
             "Question",
             stepIds.Select(stepId => new InvestigationStep(stepId, toolId)).ToArray());
+
+    private static InvestigationReport CreateReport(params string[] evidenceStepIds) =>
+        new(
+            "Summary",
+            [new EvidenceStatement("Observed fact", evidenceStepIds)],
+            [],
+            [],
+            [],
+            []);
 
     private sealed record TestObservationData(string Value) : IObservationData;
 

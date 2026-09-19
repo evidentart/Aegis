@@ -67,7 +67,8 @@ public enum InvestigationExecutionPhase
 public sealed record InvestigationOutcome(
     string? FinalAnswer = null,
     string? FailureCode = null,
-    string? FailureMessage = null);
+    string? FailureMessage = null,
+    InvestigationReport? Report = null);
 
 public sealed record Investigation(
     Guid InvestigationId,

@@ -2,11 +2,20 @@ namespace Aegis.Core;
 
 public abstract record AgentDecision;
 
-public sealed record FinalAnswerDecision(string Answer) : AgentDecision;
+public sealed record FinalAnswerDecision(InvestigationReport Report) : AgentDecision
+{
+    public FinalAnswerDecision(string answer)
+        : this(InvestigationReport.FromLegacySummary(answer))
+    {
+    }
+}
 
 public sealed record InvestigationPlanDecision(InvestigationPlan Plan) : AgentDecision;
 
-public sealed record AgentRunResult(Guid InvestigationId, string Answer);
+public sealed record AgentRunResult(Guid InvestigationId, InvestigationReport Report)
+{
+    public string Answer => Report.Summary;
+}
 
 public sealed class AgentRuntimeException : Exception
 {
