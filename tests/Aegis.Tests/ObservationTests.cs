@@ -208,6 +208,148 @@ public sealed class ObservationTests
     }
 
     [Fact]
+    public async Task RecentErrorEventsToolHasExactArgumentFreeNonBaselineContract()
+    {
+        var end = DateTimeOffset.UtcNow;
+        var data = WindowsRecentErrorEventsValidation.Build(
+            end - WindowsRecentErrorEventsValidation.ObservationWindow,
+            end,
+            [CreateEvent(end, WindowsEventChannelKind.System, WindowsEventSeverity.Error)]);
+        var tool = new WindowsRecentErrorEventsObservationTool(new FixedRecentErrorEventsSampler(data));
+
+        Assert.Equal("windows.events.recent_errors", tool.Descriptor.Id);
+        Assert.False(tool.Descriptor.BaselineEligible);
+        Assert.Equal(
+            ["RequestId", "ToolId", "RequestedAtUtc"],
+            typeof(ObservationRequest).GetProperties().Select(property => property.Name).ToArray());
+        Assert.Equal(
+            ["OccurredAtUtc", "Channel", "ProviderName", "EventId", "Severity"],
+            typeof(WindowsDiagnosticEvent).GetProperties().Select(property => property.Name).ToArray());
+        Assert.Equal(
+            ["WindowStartUtc", "WindowEndUtc", "IsTruncated", "Events"],
+            typeof(WindowsRecentErrorEvents).GetProperties().Select(property => property.Name).ToArray());
+
+        var result = await tool.ObserveAsync(CreateRequest(tool.Descriptor.Id));
+        Assert.IsType<WindowsRecentErrorEvents>(result.Data);
+    }
+
+    [Fact]
+    public void RecentErrorEventsAreBoundedNewestFirstAndTruncated()
+    {
+        var end = DateTimeOffset.UtcNow;
+        var start = end - WindowsRecentErrorEventsValidation.ObservationWindow;
+        var events = Enumerable.Range(0, 11)
+            .Select(index => CreateEvent(end.AddMinutes(-index), WindowsEventChannelKind.System, WindowsEventSeverity.Error))
+            .Concat(Enumerable.Range(0, 11)
+                .Select(index => CreateEvent(end.AddMinutes(-index).AddSeconds(-30), WindowsEventChannelKind.Application, WindowsEventSeverity.Critical)))
+            .ToArray();
+
+        var data = WindowsRecentErrorEventsValidation.Build(start, end, events);
+
+        Assert.True(data.IsTruncated);
+        Assert.Equal(20, data.Events.Count);
+        Assert.Equal(10, data.Events.Count(diagnosticEvent => diagnosticEvent.Channel == WindowsEventChannelKind.System));
+        Assert.Equal(10, data.Events.Count(diagnosticEvent => diagnosticEvent.Channel == WindowsEventChannelKind.Application));
+        Assert.Equal(end, data.Events[0].OccurredAtUtc);
+        Assert.True(data.Events.Zip(data.Events.Skip(1)).All(pair => pair.First.OccurredAtUtc >= pair.Second.OccurredAtUtc));
+    }
+
+    [Fact]
+    public void RecentErrorEventsAreTruncatedWhenRejectedNativeEventsExhaustTheBudget()
+    {
+        var end = DateTimeOffset.UtcNow;
+        var start = end - WindowsRecentErrorEventsValidation.ObservationWindow;
+        var data = WindowsRecentErrorEventsValidation.Build(
+            start,
+            end,
+            [CreateEvent(end, WindowsEventChannelKind.System, WindowsEventSeverity.Error)],
+            retrievalBudgetExhausted: true);
+
+        Assert.True(data.IsTruncated);
+        Assert.Single(data.Events);
+    }
+
+    [Fact]
+    public void RecentErrorEventsRejectInvalidWindowAndMetadata()
+    {
+        var end = DateTimeOffset.UtcNow;
+        var start = end - WindowsRecentErrorEventsValidation.ObservationWindow;
+
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsRecentErrorEventsValidation.Build(
+                start.AddSeconds(1),
+                end,
+                []));
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsRecentErrorEventsValidation.Build(
+                start,
+                end,
+                [CreateEvent(start.AddMinutes(1), (WindowsEventChannelKind)99, WindowsEventSeverity.Error)]));
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsRecentErrorEventsValidation.Build(
+                start,
+                end,
+                [CreateEvent(start.AddMinutes(1), WindowsEventChannelKind.System, (WindowsEventSeverity)99)]));
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsRecentErrorEventsValidation.Build(
+                start,
+                end,
+                [new WindowsDiagnosticEvent(start.AddMinutes(1), WindowsEventChannelKind.System, "Provider", -1, WindowsEventSeverity.Error)]));
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsRecentErrorEventsValidation.Build(
+                start,
+                end,
+                [new WindowsDiagnosticEvent(start.AddMinutes(1), WindowsEventChannelKind.System, " ", 1, WindowsEventSeverity.Error)]));
+        Assert.Throws<InvalidOperationException>(() =>
+            WindowsRecentErrorEventsValidation.Build(
+                start,
+                end,
+                [CreateEvent(start.AddSeconds(-1), WindowsEventChannelKind.System, WindowsEventSeverity.Error)]));
+    }
+
+    [Fact]
+    public async Task RecentErrorEventsCancellationIsPreserved()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sampler = new FixedRecentErrorEventsSampler(
+            cancellationAction: token => throw new OperationCanceledException(token));
+        var tool = new WindowsRecentErrorEventsObservationTool(sampler);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            tool.ObserveAsync(CreateRequest(tool.Descriptor.Id), cancellation.Token));
+    }
+
+    [Fact]
+    public async Task RecentErrorEventsFailureIsNormalizedByObservationRuntime()
+    {
+        var tool = new WindowsRecentErrorEventsObservationTool(
+            new FixedRecentErrorEventsSampler(exception: new InvalidOperationException("secret event detail")));
+        var runtime = new ObservationRuntime(new ObservationRegistry([tool]));
+
+        var result = await runtime.ObserveAsync(CreateRequest(tool.Descriptor.Id));
+
+        Assert.Equal(ObservationStatus.Failed, result.Status);
+        Assert.Equal("observation_failed", result.Failure?.Code);
+        Assert.DoesNotContain("secret event detail", result.Failure?.Message);
+    }
+
+    [Fact]
+    public void RecentErrorEventsDoNotExposeMessageOrEventDataFields()
+    {
+        var properties = typeof(WindowsRecentErrorEvents).GetProperties()
+            .Concat(typeof(WindowsDiagnosticEvent).GetProperties())
+            .Select(property => property.Name)
+            .ToArray();
+
+        Assert.DoesNotContain("Message", properties);
+        Assert.DoesNotContain("EventData", properties);
+        Assert.DoesNotContain("UserData", properties);
+        Assert.DoesNotContain("Xml", properties);
+        Assert.DoesNotContain("Path", properties);
+    }
+
+    [Fact]
     public void NormalizesProcessCpuAgainstSystemCapacity()
     {
         var cpu = WindowsPerformanceCalculations.CalculateProcessCpuUtilizationPercent(
@@ -282,6 +424,12 @@ public sealed class ObservationTests
     private static ObservationRequest CreateRequest(string toolId) =>
         new(Guid.NewGuid(), toolId);
 
+    private static WindowsDiagnosticEvent CreateEvent(
+        DateTimeOffset occurredAtUtc,
+        WindowsEventChannelKind channel,
+        WindowsEventSeverity severity) =>
+        new(occurredAtUtc, channel, channel == WindowsEventChannelKind.System ? "System.Provider" : "Application.Provider", 100, severity);
+
     private sealed class FixedSystemSampler : IWindowsPerformanceSystemSampler
     {
         private readonly WindowsPerformanceSystem _result;
@@ -305,6 +453,39 @@ public sealed class ObservationTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_result);
+        }
+    }
+
+    private sealed class FixedRecentErrorEventsSampler : IWindowsRecentErrorEventsSampler
+    {
+        private readonly WindowsRecentErrorEvents? _result;
+        private readonly Action<CancellationToken>? _cancellationAction;
+        private readonly Exception? _exception;
+
+        public FixedRecentErrorEventsSampler(
+            WindowsRecentErrorEvents? result = null,
+            Action<CancellationToken>? cancellationAction = null,
+            Exception? exception = null)
+        {
+            _result = result;
+            _cancellationAction = cancellationAction;
+            _exception = exception;
+        }
+
+        public Task<WindowsRecentErrorEvents> CaptureAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_cancellationAction is not null)
+            {
+                _cancellationAction(cancellationToken);
+            }
+
+            if (_exception is not null)
+            {
+                throw _exception;
+            }
+
+            return Task.FromResult(_result!);
         }
     }
 

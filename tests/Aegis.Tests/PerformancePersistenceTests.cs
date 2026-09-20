@@ -114,6 +114,125 @@ public sealed class PerformancePersistenceTests
     }
 
     [Fact]
+    public async Task PersistsAndReconstructsRecentErrorEventsAndEvidenceReferences()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("events", WindowsRecentErrorEventsObservationTool.ToolId));
+        var data = CreateRecentErrorEvents(isTruncated: true);
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution("events", WindowsRecentErrorEventsObservationTool.ToolId, data));
+        var report = new InvestigationReport(
+            "Recent Windows failures were observed.",
+            [new EvidenceStatement("Windows recorded recent failures.", ["events"])],
+            [],
+            [],
+            ["The event metadata does not establish causation."],
+            []);
+
+        Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: report.Summary, Report: report),
+            DateTimeOffset.UtcNow));
+
+        var details = await fixture.Store.GetAsync(fixture.InvestigationId);
+        var executionData = Assert.IsType<WindowsRecentErrorEvents>(
+            Assert.Single(details!.Investigation.StepExecutions).Result!.Data);
+        Assert.True(executionData.IsTruncated);
+        Assert.Equal(2, executionData.Events.Count);
+        Assert.Equal(WindowsEventChannelKind.Application, executionData.Events[0].Channel);
+        Assert.Equal(WindowsEventSeverity.Critical, executionData.Events[0].Severity);
+        Assert.Equal("Application.Error", executionData.Events[0].ProviderName);
+        Assert.Equal("events", Assert.Single(details.Investigation.Outcome!.Report!.ObservedFacts).EvidenceStepIds.Single());
+        Assert.Equal(1, fixture.CountRows("WindowsRecentErrorEventSnapshots"));
+        Assert.Equal(2, fixture.CountRows("WindowsRecentErrorEventEntries"));
+    }
+
+    [Fact]
+    public async Task RecentErrorEventToolMismatchRollsBackAllObservationRows()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("events", WindowsRecentErrorEventsObservationTool.ToolId));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "events",
+                WindowsRecentErrorEventsObservationTool.ToolId,
+                new WindowsSystemInfo("Windows", "10.0", 26100, "X64"))));
+
+        Assert.Equal(0, fixture.CountRows("Observations"));
+        Assert.Equal(0, fixture.CountRows("WindowsRecentErrorEventSnapshots"));
+        Assert.Equal(0, fixture.CountRows("WindowsRecentErrorEventEntries"));
+    }
+
+    [Theory]
+    [InlineData("ChannelKind", "Security")]
+    [InlineData("Severity", "Warning")]
+    public async Task RejectsMalformedPersistedRecentErrorClosedValues(string column, string value)
+    {
+        using var fixture = await CreateEventFixtureAsync();
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            PRAGMA ignore_check_constraints = ON;
+            UPDATE WindowsRecentErrorEventEntries
+            SET {column} = $value
+            WHERE ObservationId = (SELECT ObservationId FROM Observations WHERE StepId = 'events');
+            """;
+        command.Parameters.AddWithValue("$value", value);
+        command.ExecuteNonQuery();
+
+        await Assert.ThrowsAsync<InvestigationPersistenceException>(() => fixture.Store.GetAsync(fixture.InvestigationId));
+    }
+
+    [Fact]
+    public async Task RejectsMalformedPersistedRecentErrorOrdinals()
+    {
+        using var fixture = await CreateEventFixtureAsync();
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA ignore_check_constraints = ON;
+            UPDATE WindowsRecentErrorEventEntries
+            SET Ordinal = 2
+            WHERE ObservationId = (SELECT ObservationId FROM Observations WHERE StepId = 'events')
+                AND Ordinal = 1;
+            """;
+        command.ExecuteNonQuery();
+
+        await Assert.ThrowsAsync<InvestigationPersistenceException>(() => fixture.Store.GetAsync(fixture.InvestigationId));
+    }
+
+    [Fact]
+    public async Task RejectsExcessivePersistedRecentErrorRows()
+    {
+        using var fixture = await CreateEventFixtureAsync();
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA ignore_check_constraints = ON;
+            INSERT INTO WindowsRecentErrorEventEntries
+                (ObservationId, Ordinal, ChannelKind, ProviderName, EventId, Severity, OccurredAtUtc)
+            VALUES ($observation, $ordinal, 'System', 'System.Error', 100, 'Error', $occurred);
+            """;
+        command.Parameters.AddWithValue("$observation", 1);
+        command.Parameters.AddWithValue("$ordinal", 2);
+        command.Parameters.AddWithValue("$occurred", DateTimeOffset.UtcNow.ToString("O"));
+        for (var ordinal = 2; ordinal <= 21; ordinal++)
+        {
+            command.Parameters["$ordinal"].Value = ordinal;
+            command.ExecuteNonQuery();
+        }
+
+        await Assert.ThrowsAsync<InvestigationPersistenceException>(() => fixture.Store.GetAsync(fixture.InvestigationId));
+    }
+
+    [Fact]
     public async Task RejectsNonContiguousPersistedReportStatementOrdinals()
     {
         using var fixture = await CreatePreparedFixtureAsync(
@@ -344,17 +463,20 @@ public sealed class PerformancePersistenceTests
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(3)]
-    public async Task MigratesRealLegacyFixtureToSchemaV4(int legacyVersion)
+    [InlineData(4)]
+    public async Task MigratesRealLegacyFixtureToSchemaV5(int legacyVersion)
     {
         using var fixture = await CreateLegacyFixtureAsync(legacyVersion);
 
         fixture.Store.Initialize();
 
-        Assert.Equal(4, fixture.GetSchemaVersion());
+        Assert.Equal(5, fixture.GetSchemaVersion());
         Assert.True(fixture.HasTable("WindowsPerformanceSystemObservations"));
         Assert.True(fixture.HasTable("WindowsPerformanceTopProcessSnapshots"));
         Assert.True(fixture.HasTable("InvestigationReportStatements"));
         Assert.True(fixture.HasTable("InvestigationReportEvidenceReferences"));
+        Assert.True(fixture.HasTable("WindowsRecentErrorEventSnapshots"));
+        Assert.True(fixture.HasTable("WindowsRecentErrorEventEntries"));
         var details = await fixture.Store.GetAsync(fixture.InvestigationId);
 
         var execution = Assert.Single(details!.Investigation.StepExecutions);
@@ -386,7 +508,56 @@ public sealed class PerformancePersistenceTests
                 toolId,
                 observedAt,
                 ObservationStatus.Succeeded,
-                data));
+            data));
+    }
+
+    private static WindowsRecentErrorEvents CreateRecentErrorEvents(bool isTruncated = false)
+    {
+        var windowEnd = DateTimeOffset.UtcNow;
+        return new WindowsRecentErrorEvents(
+            windowEnd - WindowsRecentErrorEventsValidation.ObservationWindow,
+            windowEnd,
+            isTruncated,
+            [
+                new WindowsDiagnosticEvent(
+                    windowEnd.AddMinutes(-1),
+                    WindowsEventChannelKind.Application,
+                    "Application.Error",
+                    1000,
+                    WindowsEventSeverity.Critical),
+                new WindowsDiagnosticEvent(
+                    windowEnd.AddMinutes(-2),
+                    WindowsEventChannelKind.System,
+                    "System.Error",
+                    41,
+                    WindowsEventSeverity.Error)
+            ]);
+    }
+
+    private static async Task<PerformanceFixture> CreateEventFixtureAsync()
+    {
+        var fixture = await CreatePreparedFixtureAsync(
+            ("events", WindowsRecentErrorEventsObservationTool.ToolId));
+        try
+        {
+            await fixture.Store.AppendStepExecutionAsync(
+                fixture.InvestigationId,
+                CreateExecution(
+                    "events",
+                    WindowsRecentErrorEventsObservationTool.ToolId,
+                    CreateRecentErrorEvents()));
+            Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
+                fixture.InvestigationId,
+                InvestigationLifecycleStatus.Completed,
+                new InvestigationOutcome(FinalAnswer: "Done."),
+                DateTimeOffset.UtcNow));
+            return fixture;
+        }
+        catch
+        {
+            fixture.Dispose();
+            throw;
+        }
     }
 
     private static async Task<PerformanceFixture> CreatePreparedFixtureAsync(
@@ -641,7 +812,7 @@ public sealed class PerformancePersistenceTests
                     """);
             }
 
-            if (version == 3)
+            if (version >= 3)
             {
                 Execute(connection, """
                     CREATE TABLE WindowsPerformanceSystemObservations (
@@ -687,6 +858,42 @@ public sealed class PerformancePersistenceTests
                     CREATE INDEX IX_WindowsPerformanceTopProcessEntries_Observation
                         ON WindowsPerformanceTopProcessEntries(ObservationId, RankingKind, RankingOrdinal);
                     INSERT INTO SchemaVersions (Version) VALUES (3);
+                    """);
+            }
+
+            if (version >= 4)
+            {
+                Execute(connection, """
+                    CREATE TABLE InvestigationReportStatements (
+                        InvestigationId TEXT NOT NULL,
+                        SectionKind TEXT NOT NULL,
+                        StatementOrdinal INTEGER NOT NULL,
+                        Text TEXT NOT NULL,
+                        PRIMARY KEY (InvestigationId, SectionKind, StatementOrdinal),
+                        CHECK (SectionKind IN ('ObservedFacts', 'Conclusions', 'Hypotheses', 'Uncertainties', 'Recommendations')),
+                        CHECK (StatementOrdinal >= 0 AND StatementOrdinal < 8),
+                        CHECK (length(Text) > 0),
+                        FOREIGN KEY (InvestigationId) REFERENCES Investigations(InvestigationId)
+                    );
+                    CREATE TABLE InvestigationReportEvidenceReferences (
+                        InvestigationId TEXT NOT NULL,
+                        SectionKind TEXT NOT NULL,
+                        StatementOrdinal INTEGER NOT NULL,
+                        ReferenceOrdinal INTEGER NOT NULL,
+                        StepId TEXT NOT NULL,
+                        PRIMARY KEY (InvestigationId, SectionKind, StatementOrdinal, ReferenceOrdinal),
+                        CHECK (SectionKind IN ('ObservedFacts', 'Conclusions', 'Hypotheses')),
+                        CHECK (StatementOrdinal >= 0 AND StatementOrdinal < 8),
+                        CHECK (ReferenceOrdinal >= 0 AND ReferenceOrdinal < 4),
+                        CHECK (length(StepId) > 0),
+                        FOREIGN KEY (InvestigationId, SectionKind, StatementOrdinal)
+                            REFERENCES InvestigationReportStatements(InvestigationId, SectionKind, StatementOrdinal)
+                    );
+                    CREATE INDEX IX_InvestigationReportStatements_Investigation
+                        ON InvestigationReportStatements(InvestigationId, SectionKind, StatementOrdinal);
+                    CREATE INDEX IX_InvestigationReportEvidenceReferences_Investigation
+                        ON InvestigationReportEvidenceReferences(InvestigationId, SectionKind, StatementOrdinal, ReferenceOrdinal);
+                    INSERT INTO SchemaVersions (Version) VALUES (4);
                     """);
             }
         }

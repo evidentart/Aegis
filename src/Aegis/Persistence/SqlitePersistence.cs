@@ -60,7 +60,7 @@ public sealed class SqliteDatabase
             var version = Convert.ToInt32(
                 ExecuteScalar(connection, transaction, "SELECT COALESCE(MAX(Version), 0) FROM SchemaVersions"),
                 CultureInfo.InvariantCulture);
-            if (version > 4)
+            if (version > 5)
             {
                 throw new InvalidOperationException($"The database schema version '{version}' is newer than this application supports.");
             }
@@ -273,6 +273,39 @@ public sealed class SqliteDatabase
                     CREATE INDEX IX_InvestigationReportEvidenceReferences_Investigation
                         ON InvestigationReportEvidenceReferences(InvestigationId, SectionKind, StatementOrdinal, ReferenceOrdinal);
                     INSERT INTO SchemaVersions (Version) VALUES (4);
+                    """);
+            }
+
+            if (version < 5)
+            {
+                ExecuteNonQuery(connection, transaction, """
+                    CREATE TABLE WindowsRecentErrorEventSnapshots (
+                        ObservationId INTEGER PRIMARY KEY NOT NULL,
+                        WindowStartUtc TEXT NOT NULL,
+                        WindowEndUtc TEXT NOT NULL,
+                        IsTruncated INTEGER NOT NULL,
+                        CHECK (IsTruncated IN (0, 1)),
+                        FOREIGN KEY (ObservationId) REFERENCES Observations(ObservationId)
+                    );
+                    CREATE TABLE WindowsRecentErrorEventEntries (
+                        ObservationId INTEGER NOT NULL,
+                        Ordinal INTEGER NOT NULL,
+                        ChannelKind TEXT NOT NULL,
+                        ProviderName TEXT NOT NULL,
+                        EventId INTEGER NOT NULL,
+                        Severity TEXT NOT NULL,
+                        OccurredAtUtc TEXT NOT NULL,
+                        CHECK (Ordinal >= 0 AND Ordinal < 20),
+                        CHECK (ChannelKind IN ('System', 'Application')),
+                        CHECK (length(ProviderName) > 0 AND length(ProviderName) <= 256),
+                        CHECK (EventId >= 0 AND EventId <= 65535),
+                        CHECK (Severity IN ('Critical', 'Error')),
+                        PRIMARY KEY (ObservationId, Ordinal),
+                        FOREIGN KEY (ObservationId) REFERENCES WindowsRecentErrorEventSnapshots(ObservationId)
+                    );
+                    CREATE INDEX IX_WindowsRecentErrorEventEntries_Observation
+                        ON WindowsRecentErrorEventEntries(ObservationId, Ordinal);
+                    INSERT INTO SchemaVersions (Version) VALUES (5);
                     """);
             }
 
@@ -934,6 +967,9 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
             case WindowsPerformanceTopProcesses processes:
                 InsertTopProcessObservation(connection, transaction, observationId, processes);
                 break;
+            case WindowsRecentErrorEvents recentErrors:
+                InsertRecentErrorEventsObservation(connection, transaction, observationId, recentErrors);
+                break;
         }
 
         return observationId;
@@ -1261,6 +1297,10 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
                 ValidateProcessEntries(processes.TopCpuProcesses, "cpu");
                 ValidateProcessEntries(processes.TopMemoryProcesses, "memory");
                 return;
+            case WindowsRecentErrorEvents recentErrors:
+                EnsureObservationTool(result, WindowsRecentErrorEventsObservationTool.ToolId);
+                WindowsRecentErrorEventsValidation.Validate(recentErrors);
+                return;
             default:
                 throw new InvalidOperationException("The observation data type is not supported by persistence.");
         }
@@ -1399,6 +1439,48 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
             SqliteDatabase.AddParameter(command, "$name", process.ProcessName);
             SqliteDatabase.AddParameter(command, "$cpu", process.CpuUtilizationPercent);
             SqliteDatabase.AddParameter(command, "$workingSet", EnsureSqliteInteger(process.WorkingSetBytes, "process working-set bytes"));
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertRecentErrorEventsObservation(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long observationId,
+        WindowsRecentErrorEvents recentErrors)
+    {
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO WindowsRecentErrorEventSnapshots
+                    (ObservationId, WindowStartUtc, WindowEndUtc, IsTruncated)
+                VALUES ($observation, $windowStart, $windowEnd, $truncated);
+                """;
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            SqliteDatabase.AddParameter(command, "$windowStart", FormatDate(recentErrors.WindowStartUtc));
+            SqliteDatabase.AddParameter(command, "$windowEnd", FormatDate(recentErrors.WindowEndUtc));
+            SqliteDatabase.AddParameter(command, "$truncated", recentErrors.IsTruncated ? 1 : 0);
+            command.ExecuteNonQuery();
+        }
+
+        for (var index = 0; index < recentErrors.Events.Count; index++)
+        {
+            var diagnosticEvent = recentErrors.Events[index];
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO WindowsRecentErrorEventEntries
+                    (ObservationId, Ordinal, ChannelKind, ProviderName, EventId, Severity, OccurredAtUtc)
+                VALUES ($observation, $ordinal, $channel, $provider, $eventId, $severity, $occurred);
+                """;
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            SqliteDatabase.AddParameter(command, "$ordinal", index);
+            SqliteDatabase.AddParameter(command, "$channel", diagnosticEvent.Channel.ToString());
+            SqliteDatabase.AddParameter(command, "$provider", diagnosticEvent.ProviderName);
+            SqliteDatabase.AddParameter(command, "$eventId", diagnosticEvent.EventId);
+            SqliteDatabase.AddParameter(command, "$severity", diagnosticEvent.Severity.ToString());
+            SqliteDatabase.AddParameter(command, "$occurred", FormatDate(diagnosticEvent.OccurredAtUtc));
             command.ExecuteNonQuery();
         }
     }
@@ -1556,6 +1638,11 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
             return ReadTopProcessObservation(connection, observationId);
         }
 
+        if (string.Equals(toolId, WindowsRecentErrorEventsObservationTool.ToolId, StringComparison.Ordinal))
+        {
+            return ReadRecentErrorEventsObservation(connection, observationId);
+        }
+
         return null;
     }
 
@@ -1681,6 +1768,117 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         }
 
         return processes;
+    }
+
+    private static WindowsRecentErrorEvents ReadRecentErrorEventsObservation(
+        SqliteConnection connection,
+        long observationId)
+    {
+        DateTimeOffset windowStartUtc;
+        DateTimeOffset windowEndUtc;
+        bool isTruncated;
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT WindowStartUtc, WindowEndUtc, IsTruncated
+                FROM WindowsRecentErrorEventSnapshots
+                WHERE ObservationId = $observation;
+                """;
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                throw new InvestigationPersistenceException(
+                    "The persisted recent event observation is incomplete.");
+            }
+
+            windowStartUtc = ParseDate(reader.GetString(0));
+            windowEndUtc = ParseDate(reader.GetString(1));
+            var truncated = reader.GetInt32(2);
+            if (truncated is not (0 or 1))
+            {
+                throw new InvestigationPersistenceException(
+                    "The persisted recent event observation has an invalid truncation value.");
+            }
+
+            isTruncated = truncated == 1;
+        }
+
+        var events = new List<WindowsDiagnosticEvent>();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT Ordinal, ChannelKind, ProviderName, EventId, Severity, OccurredAtUtc
+                FROM WindowsRecentErrorEventEntries
+                WHERE ObservationId = $observation
+                ORDER BY Ordinal;
+                """;
+            SqliteDatabase.AddParameter(command, "$observation", observationId);
+            using var reader = command.ExecuteReader();
+            var expectedOrdinal = 0;
+            while (reader.Read())
+            {
+                if (reader.GetInt32(0) != expectedOrdinal)
+                {
+                    throw new InvestigationPersistenceException(
+                        "The persisted recent event observation has an invalid ordinal.");
+                }
+
+                if (expectedOrdinal >= WindowsRecentErrorEventsValidation.MaximumEvents)
+                {
+                    throw new InvestigationPersistenceException(
+                        "The persisted recent event observation exceeds its total event bound.");
+                }
+
+                var channel = reader.GetString(1) switch
+                {
+                    "System" => WindowsEventChannelKind.System,
+                    "Application" => WindowsEventChannelKind.Application,
+                    _ => throw new InvestigationPersistenceException(
+                        "The persisted recent event observation contains an invalid channel.")
+                };
+                var severity = reader.GetString(4) switch
+                {
+                    "Critical" => WindowsEventSeverity.Critical,
+                    "Error" => WindowsEventSeverity.Error,
+                    _ => throw new InvestigationPersistenceException(
+                        "The persisted recent event observation contains an invalid severity.")
+                };
+
+                if (channel is not (WindowsEventChannelKind.System or WindowsEventChannelKind.Application) ||
+                    severity is not (WindowsEventSeverity.Critical or WindowsEventSeverity.Error))
+                {
+                    throw new InvestigationPersistenceException(
+                        "The persisted recent event observation contains an invalid closed value.");
+                }
+
+                events.Add(new WindowsDiagnosticEvent(
+                    ParseDate(reader.GetString(5)),
+                    channel,
+                    reader.GetString(2),
+                    reader.GetInt32(3),
+                    severity));
+                expectedOrdinal++;
+            }
+        }
+
+        var data = new WindowsRecentErrorEvents(
+            windowStartUtc,
+            windowEndUtc,
+            isTruncated,
+            events);
+        try
+        {
+            WindowsRecentErrorEventsValidation.Validate(data);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            throw new InvestigationPersistenceException(
+                "The persisted recent event observation is invalid.",
+                exception);
+        }
+
+        return data;
     }
 
     private static TimeSpan ReadSampleDuration(long ticks)

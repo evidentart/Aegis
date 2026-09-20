@@ -217,8 +217,31 @@ public sealed partial class MainWindow : Window
             $"{data.SampleDuration.TotalMilliseconds:F0} ms. CPU: " +
             string.Join(", ", data.TopCpuProcesses.Select(FormatProcess)) + ". Memory: " +
             string.Join(", ", data.TopMemoryProcesses.Select(FormatProcess)) + ".",
+        WindowsRecentErrorEvents data => FormatRecentErrorEvents(data),
         _ => "The observation returned no displayable typed details."
     };
+
+    private static string FormatRecentErrorEvents(WindowsRecentErrorEvents data)
+    {
+        var lines = new List<string>
+        {
+            $"Recent Windows Critical/Error events — last 48 hours ({data.Events.Count} retained)."
+        };
+
+        foreach (var diagnosticEvent in data.Events)
+        {
+            lines.Add(
+                $"{diagnosticEvent.OccurredAtUtc.LocalDateTime:g}  {diagnosticEvent.Channel}  " +
+                $"{diagnosticEvent.ProviderName}  Event {diagnosticEvent.EventId}  {diagnosticEvent.Severity}");
+        }
+
+        if (data.IsTruncated)
+        {
+            lines.Add("Additional matching events were omitted because the observation reached its bounded limit.");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
 
     private static string FormatReport(InvestigationReport report)
     {

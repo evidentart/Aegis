@@ -26,7 +26,8 @@ public partial class App : Application
             [
                 new WindowsSystemInfoObservationTool(),
                 new WindowsPerformanceSystemObservationTool(),
-                new WindowsPerformanceTopProcessesObservationTool()
+                new WindowsPerformanceTopProcessesObservationTool(),
+                new WindowsRecentErrorEventsObservationTool()
             ]);
         _observationRuntime = new ObservationRuntime(
             observationRegistry,

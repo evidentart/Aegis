@@ -20,6 +20,7 @@ public sealed class PlanningContextTests
             .Content;
         Assert.Contains("windows.performance.system", systemInstruction);
         Assert.Contains("windows.performance.top_processes", systemInstruction);
+        Assert.Contains("windows.events.recent_errors", systemInstruction);
         Assert.DoesNotContain("Do not request commands, files, paths, registry access, processes,", systemInstruction);
         Assert.Contains("Process observations are permitted only through exact registered read-only observation tools", systemInstruction);
         Assert.Contains("arbitrary process targeting", systemInstruction);
@@ -51,7 +52,11 @@ public sealed class PlanningContextTests
                 new ObservationToolDescriptor(
                     "windows.performance.top_processes",
                     "Top process performance snapshot",
-                    "Reads bounded rankings for accessible processes.")
+                    "Reads bounded rankings for accessible processes."),
+                new ObservationToolDescriptor(
+                    "windows.events.recent_errors",
+                    "Recent Windows error events",
+                    "Reads bounded Critical and Error metadata from System and Application.")
             ],
             new InvestigationBudget(3, 0),
             0,

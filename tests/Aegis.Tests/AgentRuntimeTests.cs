@@ -1,3 +1,4 @@
+using Aegis;
 using Aegis.Core;
 using Xunit;
 
@@ -194,6 +195,43 @@ public sealed class AgentRuntimeTests
         Assert.Contains(model.Requests[0].Messages, message =>
             message.Role == LanguageModelMessageRole.Observation &&
             message.Content.Contains("observed value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SerializesRecentEventEnumValuesAsNamesInModelEvidence()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationPlanDecision(CreatePlan("step-2")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision("Final answer."));
+        var end = DateTimeOffset.UtcNow;
+        var data = WindowsRecentErrorEventsValidation.Build(
+            end - WindowsRecentErrorEventsValidation.ObservationWindow,
+            end,
+            [new WindowsDiagnosticEvent(
+                end,
+                WindowsEventChannelKind.Application,
+                "Application.Provider",
+                100,
+                WindowsEventSeverity.Critical)]);
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: data));
+
+        await runtime.RunAsync("Question");
+
+        var evidenceMessages = model.Requests.Single().Messages
+            .Where(message => message.Role == LanguageModelMessageRole.Observation)
+            .ToArray();
+        Assert.Equal(2, evidenceMessages.Length);
+        Assert.All(evidenceMessages, evidence =>
+        {
+            Assert.Contains("\"Channel\":\"Application\"", evidence.Content);
+            Assert.Contains("\"Severity\":\"Critical\"", evidence.Content);
+            Assert.DoesNotContain("\"Channel\":1", evidence.Content);
+            Assert.DoesNotContain("\"Severity\":0", evidence.Content);
+        });
     }
 
     [Fact]
