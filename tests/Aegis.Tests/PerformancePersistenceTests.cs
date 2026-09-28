@@ -96,6 +96,50 @@ public sealed class PerformancePersistenceTests
     }
 
     [Fact]
+    public async Task FailedPersistedObservationCannotSupportFactualReportCitation()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("step-1", WindowsSystemInfoObservationTool.ToolId));
+        var requestId = Guid.NewGuid();
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            new InvestigationStepExecution(
+                0,
+                "step-1",
+                WindowsSystemInfoObservationTool.ToolId,
+                requestId,
+                observedAtUtc,
+                observedAtUtc,
+                "1.0",
+                InvestigationStepStatus.Failed,
+                new ObservationResult(
+                    requestId,
+                    WindowsSystemInfoObservationTool.ToolId,
+                    observedAtUtc,
+                    ObservationStatus.Failed,
+                    Failure: new ObservationFailure("unavailable", "The observation was unavailable."))));
+        var report = new InvestigationReport(
+            "Summary",
+            [new EvidenceStatement("Unsupported fact.", ["step-1"])],
+            [],
+            [],
+            [],
+            []);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: report.Summary, Report: report),
+            DateTimeOffset.UtcNow));
+
+        var details = await fixture.Store.GetAsync(fixture.InvestigationId);
+        Assert.Equal(InvestigationLifecycleStatus.Running, details!.Investigation.LifecycleStatus);
+        Assert.Null(details.Investigation.Outcome);
+        Assert.Equal(0, fixture.CountRows("InvestigationReportStatements"));
+    }
+
+    [Fact]
     public async Task RejectsInvalidPersistedReportSectionKind()
     {
         using var fixture = await CreatePreparedFixtureAsync(

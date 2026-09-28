@@ -1,3 +1,4 @@
+using Aegis;
 using Aegis.Core;
 using Xunit;
 
@@ -9,7 +10,7 @@ public sealed class ApplicationInfoTests
     public void ApplicationMetadataIsDefined()
     {
         Assert.Equal("Aegis", ApplicationInfo.Name);
-        Assert.Equal("0.2.0", ApplicationInfo.Version);
+        Assert.Equal("0.10.0", ApplicationInfo.Version);
     }
 
     [Fact]
@@ -30,6 +31,41 @@ public sealed class ApplicationInfoTests
         var service = CreateService(new FakeLanguageModel());
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.InvestigateAsync("  "));
+    }
+
+    [Fact]
+    public async Task InvestigationServiceAcceptsMaximumQuestionLength()
+    {
+        var model = new FakeLanguageModel();
+        var service = CreateService(model);
+        var question = new string('q', InvestigationInputValidator.MaximumQuestionLength);
+
+        await service.InvestigateAsync(question);
+
+        Assert.Equal(question, model.LastQuestion);
+        Assert.Equal(1, model.CompleteCallCount);
+    }
+
+    [Fact]
+    public async Task InvestigationServiceRejectsOversizedQuestionBeforeProviderUse()
+    {
+        var model = new FakeLanguageModel();
+        var service = CreateService(model);
+        var question = new string('q', InvestigationInputValidator.MaximumQuestionLength + 1);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => service.InvestigateAsync(question));
+
+        Assert.Contains("2000 characters or fewer", exception.Message);
+        Assert.Equal(0, model.CompleteCallCount);
+    }
+
+    [Fact]
+    public async Task MissingProviderIsReportedWithoutExecutingAnything()
+    {
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            new UnavailableLanguageModel().CompleteAsync(new LanguageModelRequest([])));
+
+        Assert.Equal(LanguageModelFailureCategory.ProviderNotConfigured, exception.Category);
     }
 
     private static InvestigationService CreateService(ILanguageModel model) =>
@@ -67,14 +103,14 @@ public sealed class ApplicationInfoTests
 
         public CancellationToken LastCancellationToken { get; private set; }
 
+        public int CompleteCallCount { get; private set; }
+
         public Task<AgentDecision> CompleteAsync(
             LanguageModelRequest request,
             CancellationToken cancellationToken = default)
         {
-            LastQuestion = request.Messages.First(message =>
-                    message.Role == LanguageModelMessageRole.User &&
-                    message.Content is "What is Aegis?" or "Question" or "Question.")
-                .Content;
+            CompleteCallCount++;
+            LastQuestion = request.Messages.First(message => message.Role == LanguageModelMessageRole.User).Content;
             LastCancellationToken = cancellationToken;
             return Task.FromResult<AgentDecision>(new FinalAnswerDecision("Aegis is ready."));
         }

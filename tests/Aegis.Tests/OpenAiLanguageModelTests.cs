@@ -1,5 +1,7 @@
 using Aegis;
 using Aegis.Core;
+using System.ClientModel;
+using System.Text.Json;
 using Xunit;
 
 namespace Aegis.Tests;
@@ -26,7 +28,7 @@ public sealed class OpenAiLanguageModelTests
         Assert.Empty(finalDecision.Report.Uncertainties);
         Assert.Empty(finalDecision.Report.Recommendations);
         Assert.Collection(
-            client.Messages,
+            client.Requests.Single().Messages,
             message =>
             {
                 Assert.Equal(LanguageModelMessageRole.System, message.Role);
@@ -104,6 +106,156 @@ public sealed class OpenAiLanguageModelTests
         Assert.Equal("step-1", step.StepId);
         Assert.Equal("windows.system.info", step.ToolId);
         Assert.Equal(InvestigationStepStatus.Pending, step.Status);
+    }
+
+    [Fact]
+    public async Task AppliesPhaseSpecificOutputBoundsAndStructuredSchemas()
+    {
+        var client = new FakeOpenAiChatClient(
+            "{\"kind\":\"final_answer\",\"summary\":\"Summary\",\"observed_facts\":[],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[],\"recommendations\":[]}");
+        var model = new OpenAiLanguageModel(client);
+
+        await model.CompleteAsync(new LanguageModelRequest(
+            [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+            LanguageModelCallPhase.Finalization));
+
+        var request = Assert.Single(client.Requests);
+        Assert.Equal(OpenAiResponseSchemas.MaximumFinalizationOutputTokens, request.MaxOutputTokenCount);
+        Assert.Equal(OpenAiReasoningEffort.Minimal, request.ReasoningEffort);
+        Assert.Contains("final_answer", request.ResponseSchema);
+        Assert.Contains("additionalProperties", request.ResponseSchema);
+        using var schema = JsonDocument.Parse(request.ResponseSchema);
+        Assert.Equal(JsonValueKind.Object, schema.RootElement.ValueKind);
+        Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            1,
+            schema.RootElement
+                .GetProperty("properties")
+                .EnumerateObject()
+                .Count(property => property.Name == "conclusions"));
+        Assert.Equal(
+            1,
+            schema.RootElement
+                .GetProperty("required")
+                .EnumerateArray()
+                .Count(property => property.GetString() == "conclusions"));
+
+        var planningClient = new FakeOpenAiChatClient(
+            "{\"kind\":\"investigation_plan\",\"objective\":\"Inspect.\",\"steps\":[{\"step_id\":\"step-1\",\"tool_id\":\"tool.one\"}]}");
+        var planningModel = new OpenAiLanguageModel(planningClient);
+        await planningModel.CompleteAsync(new LanguageModelRequest(
+            [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+            LanguageModelCallPhase.InitialPlanning));
+
+        var planningRequest = Assert.Single(planningClient.Requests);
+        Assert.Equal(OpenAiResponseSchemas.MaximumPlanningOutputTokens, planningRequest.MaxOutputTokenCount);
+        Assert.Equal(OpenAiReasoningEffort.Minimal, planningRequest.ReasoningEffort);
+        Assert.True(
+            planningRequest.MaxOutputTokenCount > 512,
+            "Planning must retain more output headroom than the previous 512-token bound.");
+        using var planningSchema = JsonDocument.Parse(planningRequest.ResponseSchema);
+        Assert.Equal(JsonValueKind.Object, planningSchema.RootElement.ValueKind);
+
+        var replanningClient = new FakeOpenAiChatClient(
+            "{\"kind\":\"investigation_plan\",\"objective\":\"Inspect.\",\"steps\":[{\"step_id\":\"step-1\",\"tool_id\":\"tool.one\"}]}");
+        var replanningModel = new OpenAiLanguageModel(replanningClient);
+        await replanningModel.CompleteAsync(new LanguageModelRequest(
+            [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+            LanguageModelCallPhase.Replanning));
+
+        var replanningRequest = Assert.Single(replanningClient.Requests);
+        Assert.Equal(OpenAiResponseSchemas.MaximumPlanningOutputTokens, replanningRequest.MaxOutputTokenCount);
+        Assert.Equal(OpenAiReasoningEffort.Minimal, replanningRequest.ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task MissingUsageMetadataDoesNotBreakSuccessfulDecision()
+    {
+        LanguageModelCallDiagnostics? diagnostics = null;
+        var model = new OpenAiLanguageModel(
+            new FakeOpenAiChatClient(
+                "{\"kind\":\"final_answer\",\"summary\":\"Summary\",\"observed_facts\":[],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[],\"recommendations\":[]}"),
+            "gpt-test",
+            value => diagnostics = value);
+
+        await model.CompleteAsync(new LanguageModelRequest(
+            [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+            LanguageModelCallPhase.Finalization));
+
+        Assert.NotNull(diagnostics);
+        Assert.Equal(LanguageModelCallOutcome.Succeeded, diagnostics!.Outcome);
+        Assert.Equal(LanguageModelCallPhase.Finalization, diagnostics.Phase);
+        Assert.Equal("gpt-test", diagnostics.Model);
+        Assert.Null(diagnostics.InputTokenCount);
+        Assert.Null(diagnostics.OutputTokenCount);
+        Assert.Null(diagnostics.TotalTokenCount);
+    }
+
+    [Fact]
+    public async Task ProviderFailureWithoutResponseIsClassifiedSafely()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            exception: new ClientResultException("provider rejected", null, null)));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Finalization)));
+
+        Assert.Equal(LanguageModelFailureCategory.ProviderUnavailable, exception.Category);
+    }
+
+    [Fact]
+    public async Task ProviderTimeoutIsClassifiedAsUnavailable()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            exception: new TimeoutException("timed out")));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.InitialPlanning)));
+
+        Assert.Equal(LanguageModelFailureCategory.ProviderUnavailable, exception.Category);
+    }
+
+    [Fact]
+    public async Task CancellationIsReportedWithoutReplacingCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        LanguageModelCallDiagnostics? diagnostics = null;
+        var model = new OpenAiLanguageModel(
+            new FakeOpenAiChatClient(cancellationToken: cancellation.Token),
+            reportDiagnostics: value => diagnostics = value);
+
+        await Assert.ThrowsAsync<TaskCanceledException>(() =>
+            model.CompleteAsync(
+                new LanguageModelRequest(
+                    [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                    LanguageModelCallPhase.InitialPlanning),
+                cancellation.Token));
+
+        Assert.NotNull(diagnostics);
+        Assert.Equal(LanguageModelFailureCategory.Cancelled, diagnostics!.FailureCategory);
+    }
+
+    [Fact]
+    public void BadRequestDuringStructuredCallRemainsProviderRejectionWithoutReliableSchemaEvidence()
+    {
+        Assert.Equal(
+            LanguageModelFailureCategory.ProviderRejected,
+            OpenAiLanguageModel.ClassifyProviderFailure(400));
+    }
+
+    [Theory]
+    [InlineData(401)]
+    [InlineData(403)]
+    public void AuthenticationProviderFailuresAreClassifiedSafely(int status)
+    {
+        Assert.Equal(
+            LanguageModelFailureCategory.AuthenticationRejected,
+            OpenAiLanguageModel.ClassifyProviderFailure(status));
     }
 
     [Fact]
@@ -228,13 +380,13 @@ public sealed class OpenAiLanguageModelTests
             _cancellationToken = cancellationToken;
         }
 
-        public List<OpenAiMessage> Messages { get; } = [];
+        public List<OpenAiCompletionRequest> Requests { get; } = [];
 
-        public Task<string> CompleteAsync(
-            IReadOnlyList<OpenAiMessage> messages,
+        public Task<OpenAiCompletion> CompleteAsync(
+            OpenAiCompletionRequest request,
             CancellationToken cancellationToken = default)
         {
-            Messages.AddRange(messages);
+            Requests.Add(request);
             if (_exception is not null)
             {
                 throw _exception;
@@ -242,10 +394,15 @@ public sealed class OpenAiLanguageModelTests
 
             if (_cancellationToken is { } token)
             {
-                return Task.FromCanceled<string>(token);
+                return Task.FromCanceled<OpenAiCompletion>(token);
             }
 
-            return Task.FromResult(_answer ?? string.Empty);
+            return Task.FromResult(new OpenAiCompletion(
+                _answer ?? string.Empty,
+                "stop",
+                InputTokenCount: null,
+                OutputTokenCount: null,
+                TotalTokenCount: null));
         }
     }
 }

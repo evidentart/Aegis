@@ -981,7 +981,7 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         Guid investigationId,
         InvestigationReport report)
     {
-        var evidenceStepIds = ReadCollectedEvidenceStepIds(connection, transaction, investigationId);
+        var evidenceStepIds = ReadSuccessfulEvidenceStepIds(connection, transaction, investigationId);
         InvestigationReportValidator.Validate(report, evidenceStepIds);
 
         var sections = new[]
@@ -1149,7 +1149,7 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         {
             InvestigationReportValidator.Validate(
                 report,
-                ReadCollectedEvidenceStepIds(connection, transaction: null, investigationId));
+                ReadSuccessfulEvidenceStepIds(connection, transaction: null, investigationId));
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentNullException)
         {
@@ -1237,7 +1237,7 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
     private static bool IsEvidenceSection(string sectionKind) =>
         sectionKind is ObservedFactsSection or ConclusionsSection or HypothesesSection;
 
-    private static IReadOnlySet<string> ReadCollectedEvidenceStepIds(
+    private static IReadOnlySet<string> ReadSuccessfulEvidenceStepIds(
         SqliteConnection connection,
         SqliteTransaction? transaction,
         Guid investigationId)
@@ -1246,11 +1246,16 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            SELECT StepId
-            FROM StepExecutions
-            WHERE InvestigationId = $investigation AND ObservationId IS NOT NULL;
+            SELECT execution.StepId
+            FROM StepExecutions execution
+            INNER JOIN Observations observation
+                ON observation.ObservationId = execution.ObservationId
+            WHERE execution.InvestigationId = $investigation
+              AND execution.ObservationId IS NOT NULL
+              AND observation.Status = $succeeded;
             """;
         SqliteDatabase.AddParameter(command, "$investigation", investigationId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$succeeded", (int)ObservationStatus.Succeeded);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

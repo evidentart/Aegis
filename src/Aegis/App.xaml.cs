@@ -65,7 +65,9 @@ public partial class App : Application
         else
         {
             languageModel = new OpenAiLanguageModel(
-                new SdkOpenAiChatClient(new ChatClient(model, apiKey)));
+                new SdkOpenAiChatClient(new ChatClient(model, apiKey)),
+                model,
+                LogLanguageModelDiagnostics);
         }
 
         _investigationService = new InvestigationService(
@@ -88,11 +90,28 @@ public partial class App : Application
         _window.Activate();
     }
 
-    private sealed class UnavailableLanguageModel : Aegis.Core.ILanguageModel
+    private void LogLanguageModelDiagnostics(LanguageModelCallDiagnostics diagnostics)
     {
-        public Task<Aegis.Core.AgentDecision> CompleteAsync(
-            Aegis.Core.LanguageModelRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new Aegis.Core.LanguageModelException("Configure AEGIS_OPENAI_API_KEY for local development.");
+        if (diagnostics.Outcome == LanguageModelCallOutcome.Succeeded)
+        {
+            _logger.LogInformation(
+                "OpenAI call completed. Phase={Phase} Model={Model} FinishReason={FinishReason} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens} ElapsedMs={ElapsedMs}.",
+                diagnostics.Phase,
+                diagnostics.Model,
+                diagnostics.FinishReason ?? "unknown",
+                diagnostics.InputTokenCount?.ToString() ?? "unknown",
+                diagnostics.OutputTokenCount?.ToString() ?? "unknown",
+                diagnostics.TotalTokenCount?.ToString() ?? "unknown",
+                diagnostics.Elapsed.TotalMilliseconds.ToString("F0"));
+            return;
+        }
+
+        _logger.LogWarning(
+            "OpenAI call failed. Phase={Phase} Model={Model} Category={Category} ProviderStatusCode={ProviderStatusCode} ElapsedMs={ElapsedMs}.",
+            diagnostics.Phase,
+            diagnostics.Model,
+            diagnostics.FailureCategory,
+            diagnostics.ProviderStatusCode?.ToString() ?? "none",
+            diagnostics.Elapsed.TotalMilliseconds.ToString("F0"));
     }
 }

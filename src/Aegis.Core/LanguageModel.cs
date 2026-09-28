@@ -7,6 +7,44 @@ public interface ILanguageModel
         CancellationToken cancellationToken = default);
 }
 
+public enum LanguageModelCallPhase
+{
+    Unknown,
+    InitialPlanning,
+    Replanning,
+    Finalization
+}
+
+public enum LanguageModelFailureCategory
+{
+    Unknown,
+    ProviderNotConfigured,
+    AuthenticationRejected,
+    ProviderRejected,
+    ProviderUnavailable,
+    InvalidModelResponse,
+    StructuredOutputFailure,
+    Cancelled
+}
+
+public enum LanguageModelCallOutcome
+{
+    Succeeded,
+    Failed
+}
+
+public sealed record LanguageModelCallDiagnostics(
+    LanguageModelCallPhase Phase,
+    string Model,
+    LanguageModelCallOutcome Outcome,
+    LanguageModelFailureCategory? FailureCategory,
+    string? FinishReason,
+    int? InputTokenCount,
+    int? OutputTokenCount,
+    int? TotalTokenCount,
+    int? ProviderStatusCode,
+    TimeSpan Elapsed);
+
 public enum LanguageModelMessageRole
 {
     System,
@@ -20,13 +58,48 @@ public sealed record LanguageModelMessage(
     string Content);
 
 public sealed record LanguageModelRequest(
-    IReadOnlyList<LanguageModelMessage> Messages);
+    IReadOnlyList<LanguageModelMessage> Messages,
+    LanguageModelCallPhase Phase = LanguageModelCallPhase.Unknown);
 
 public sealed class LanguageModelException : Exception
 {
     public LanguageModelException(string message, Exception? innerException = null)
+        : this(message, LanguageModelFailureCategory.Unknown, innerException)
+    {
+    }
+
+    public LanguageModelException(
+        string message,
+        LanguageModelFailureCategory category,
+        Exception? innerException = null)
         : base(message, innerException)
     {
+        Category = category;
+    }
+
+    public LanguageModelFailureCategory Category { get; }
+}
+
+public static class InvestigationInputValidator
+{
+    public const int MaximumQuestionLength = 2000;
+
+    public static string NormalizeQuestion(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            throw new ArgumentException("An investigation question is required.", nameof(question));
+        }
+
+        var normalizedQuestion = question.Trim();
+        if (normalizedQuestion.Length > MaximumQuestionLength)
+        {
+            throw new ArgumentException(
+                $"The investigation question must be {MaximumQuestionLength} characters or fewer.",
+                nameof(question));
+        }
+
+        return normalizedQuestion;
     }
 }
 
@@ -43,13 +116,9 @@ public sealed class InvestigationService
         string question,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(question))
-        {
-            throw new ArgumentException("A question is required.", nameof(question));
-        }
-
+        var normalizedQuestion = InvestigationInputValidator.NormalizeQuestion(question);
         return _agentRuntime.RunAsync(
-            question.Trim(),
+            normalizedQuestion,
             cancellationToken);
     }
 }

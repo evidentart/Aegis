@@ -1,17 +1,38 @@
 using Aegis.Core;
 using OpenAI.Chat;
+using System.ClientModel;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace Aegis;
 
 internal interface IOpenAiChatClient
 {
-    Task<string> CompleteAsync(
-        IReadOnlyList<OpenAiMessage> messages,
+    Task<OpenAiCompletion> CompleteAsync(
+        OpenAiCompletionRequest request,
         CancellationToken cancellationToken = default);
 }
 
 internal sealed record OpenAiMessage(LanguageModelMessageRole Role, string Content);
+
+internal enum OpenAiReasoningEffort
+{
+    None,
+    Minimal
+}
+
+internal sealed record OpenAiCompletionRequest(
+    IReadOnlyList<OpenAiMessage> Messages,
+    int MaxOutputTokenCount,
+    string ResponseSchema,
+    OpenAiReasoningEffort ReasoningEffort);
+
+internal sealed record OpenAiCompletion(
+    string Content,
+    string? FinishReason,
+    int? InputTokenCount,
+    int? OutputTokenCount,
+    int? TotalTokenCount);
 
 internal sealed class SdkOpenAiChatClient : IOpenAiChatClient
 {
@@ -22,18 +43,40 @@ internal sealed class SdkOpenAiChatClient : IOpenAiChatClient
         _chatClient = chatClient;
     }
 
-    public async Task<string> CompleteAsync(
-        IReadOnlyList<OpenAiMessage> messages,
+    public async Task<OpenAiCompletion> CompleteAsync(
+        OpenAiCompletionRequest request,
         CancellationToken cancellationToken = default)
     {
-        var chatMessages = messages
+        var chatMessages = request.Messages
             .Select(ToChatMessage)
             .ToArray();
+        var options = new ChatCompletionOptions
+        {
+            MaxOutputTokenCount = request.MaxOutputTokenCount,
+            ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
+                "aegis_decision",
+                BinaryData.FromString(request.ResponseSchema),
+                "Aegis structured decision",
+                jsonSchemaIsStrict: true)
+        };
+#pragma warning disable OPENAI001
+        if (request.ReasoningEffort == OpenAiReasoningEffort.Minimal)
+        {
+            options.ReasoningEffortLevel = ChatReasoningEffortLevel.Minimal;
+        }
+#pragma warning restore OPENAI001
         var completion = await _chatClient.CompleteChatAsync(
             chatMessages,
+            options,
             cancellationToken: cancellationToken);
 
-        return completion.Value.Content.FirstOrDefault()?.Text ?? string.Empty;
+        var value = completion.Value;
+        return new OpenAiCompletion(
+            value.Content.FirstOrDefault()?.Text ?? string.Empty,
+            value.FinishReason.ToString(),
+            value.Usage?.InputTokenCount,
+            value.Usage?.OutputTokenCount,
+            value.Usage?.TotalTokenCount);
     }
 
     private static ChatMessage ToChatMessage(OpenAiMessage message) => message.Role switch
@@ -51,44 +94,249 @@ internal sealed class SdkOpenAiChatClient : IOpenAiChatClient
 internal sealed class OpenAiLanguageModel : ILanguageModel
 {
     private readonly IOpenAiChatClient _chatClient;
+    private readonly string _model;
+    private readonly Action<LanguageModelCallDiagnostics> _reportDiagnostics;
 
-    public OpenAiLanguageModel(IOpenAiChatClient chatClient)
+    public OpenAiLanguageModel(
+        IOpenAiChatClient chatClient,
+        string model = "unknown",
+        Action<LanguageModelCallDiagnostics>? reportDiagnostics = null)
     {
         _chatClient = chatClient;
+        _model = string.IsNullOrWhiteSpace(model) ? "unknown" : model.Trim();
+        _reportDiagnostics = reportDiagnostics ?? (_ => { });
     }
 
     public async Task<AgentDecision> CompleteAsync(
         LanguageModelRequest request,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        var stopwatch = Stopwatch.StartNew();
+        var completionRequest = new OpenAiCompletionRequest(
+            request.Messages
+                .Select(message => new OpenAiMessage(message.Role, message.Content))
+                .ToArray(),
+            GetMaximumOutputTokenCount(request.Phase),
+            OpenAiResponseSchemas.For(request.Phase),
+            GetReasoningEffortLevel(request.Phase));
+        OpenAiCompletion? completion = null;
+
         try
         {
-            var content = await _chatClient.CompleteAsync(
-                request.Messages
-                    .Select(message => new OpenAiMessage(message.Role, message.Content))
-                    .ToArray(),
+            completion = await _chatClient.CompleteAsync(
+                completionRequest,
                 cancellationToken: cancellationToken);
 
-            if (string.IsNullOrWhiteSpace(content))
+            if (string.IsNullOrWhiteSpace(completion.Content))
             {
-                throw new LanguageModelException("The language model returned an empty decision.");
+                throw new LanguageModelException(
+                    "The language model returned an empty decision.",
+                    LanguageModelFailureCategory.InvalidModelResponse);
             }
 
-            return OpenAiDecisionParser.Parse(content);
+            var decision = OpenAiDecisionParser.Parse(completion.Content);
+            ReportDiagnostics(
+                request,
+                LanguageModelCallOutcome.Succeeded,
+                failureCategory: null,
+                completion,
+                stopwatch.Elapsed,
+                providerStatusCode: null);
+            return decision;
         }
-        catch (LanguageModelException)
+        catch (LanguageModelException exception)
         {
+            ReportDiagnostics(
+                request,
+                LanguageModelCallOutcome.Failed,
+                exception.Category,
+                completion,
+                stopwatch.Elapsed,
+                providerStatusCode: null);
             throw;
         }
         catch (OperationCanceledException)
         {
+            ReportDiagnostics(
+                request,
+                LanguageModelCallOutcome.Failed,
+                LanguageModelFailureCategory.Cancelled,
+                completion: null,
+                stopwatch.Elapsed,
+                providerStatusCode: null);
             throw;
+        }
+        catch (ClientResultException exception)
+        {
+            var category = ClassifyProviderFailure(exception);
+            ReportDiagnostics(
+                request,
+                LanguageModelCallOutcome.Failed,
+                category,
+                completion: null,
+                stopwatch.Elapsed,
+                exception.Status);
+            throw new LanguageModelException(
+                "The language model request failed.",
+                category,
+                exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            ReportDiagnostics(
+                request,
+                LanguageModelCallOutcome.Failed,
+                LanguageModelFailureCategory.ProviderUnavailable,
+                completion: null,
+                stopwatch.Elapsed,
+                providerStatusCode: null);
+            throw new LanguageModelException(
+                "The language model request failed.",
+                LanguageModelFailureCategory.ProviderUnavailable,
+                exception);
+        }
+        catch (TimeoutException exception)
+        {
+            ReportDiagnostics(
+                request,
+                LanguageModelCallOutcome.Failed,
+                LanguageModelFailureCategory.ProviderUnavailable,
+                completion: null,
+                stopwatch.Elapsed,
+                providerStatusCode: null);
+            throw new LanguageModelException(
+                "The language model request failed.",
+                LanguageModelFailureCategory.ProviderUnavailable,
+                exception);
         }
         catch (Exception exception)
         {
+            ReportDiagnostics(
+                request,
+                LanguageModelCallOutcome.Failed,
+                LanguageModelFailureCategory.Unknown,
+                completion: null,
+                stopwatch.Elapsed,
+                providerStatusCode: null);
             throw new LanguageModelException("The language model request failed.", exception);
         }
     }
+
+    private void ReportDiagnostics(
+        LanguageModelRequest request,
+        LanguageModelCallOutcome outcome,
+        LanguageModelFailureCategory? failureCategory,
+        OpenAiCompletion? completion,
+        TimeSpan elapsed,
+        int? providerStatusCode)
+    {
+        try
+        {
+            _reportDiagnostics(new LanguageModelCallDiagnostics(
+                request.Phase,
+                _model,
+                outcome,
+                failureCategory,
+                completion?.FinishReason,
+                completion?.InputTokenCount,
+                completion?.OutputTokenCount,
+                completion?.TotalTokenCount,
+                providerStatusCode,
+                elapsed));
+        }
+        catch
+        {
+            // Diagnostics must never replace the model outcome.
+        }
+    }
+
+    private static int GetMaximumOutputTokenCount(LanguageModelCallPhase phase) =>
+        phase == LanguageModelCallPhase.Finalization
+            ? OpenAiResponseSchemas.MaximumFinalizationOutputTokens
+            : OpenAiResponseSchemas.MaximumPlanningOutputTokens;
+
+    private static OpenAiReasoningEffort GetReasoningEffortLevel(LanguageModelCallPhase phase) =>
+        phase is LanguageModelCallPhase.InitialPlanning or
+            LanguageModelCallPhase.Replanning or
+            LanguageModelCallPhase.Finalization
+            ? OpenAiReasoningEffort.Minimal
+            : OpenAiReasoningEffort.None;
+
+    internal static LanguageModelFailureCategory ClassifyProviderFailure(
+        ClientResultException exception) =>
+        ClassifyProviderFailure(exception.Status);
+
+    internal static LanguageModelFailureCategory ClassifyProviderFailure(
+        int status) =>
+        status is 401 or 403
+            ? LanguageModelFailureCategory.AuthenticationRejected
+            : status == 0 || status == 408 || status == 429 || status >= 500
+                ? LanguageModelFailureCategory.ProviderUnavailable
+                : LanguageModelFailureCategory.ProviderRejected;
+}
+
+internal static class OpenAiResponseSchemas
+{
+    internal const int MaximumPlanningOutputTokens = 1024;
+    internal const int MaximumFinalizationOutputTokens = 1200;
+
+    private const string PlanningSchema = """
+        {
+          "type":"object",
+          "additionalProperties":false,
+          "properties":{
+            "kind":{"type":"string","enum":["investigation_plan"]},
+            "objective":{"type":"string"},
+            "steps":{
+              "type":"array",
+              "items":{
+                "type":"object","additionalProperties":false,
+                "properties":{"step_id":{"type":"string"},"tool_id":{"type":"string"}},
+                "required":["step_id","tool_id"]
+              }
+            }
+          },
+          "required":["kind","objective","steps"]
+        }
+        """;
+
+    private const string FinalizationSchema = """
+        {
+          "type":"object",
+          "additionalProperties":false,
+          "properties":{
+            "kind":{"type":"string","enum":["final_answer"]},
+            "summary":{"type":"string"},
+            "observed_facts":{"$ref":"#/$defs/evidence_statements"},
+            "conclusions":{"$ref":"#/$defs/evidence_statements"},
+            "hypotheses":{"$ref":"#/$defs/evidence_statements"},
+            "uncertainties":{"$ref":"#/$defs/text_list"},
+            "recommendations":{"$ref":"#/$defs/text_list"}
+          },
+          "required":["kind","summary","observed_facts","conclusions","hypotheses","uncertainties","recommendations"],
+          "$defs":{
+            "evidence_statements":{
+              "type":"array",
+              "items":{
+                "type":"object","additionalProperties":false,
+                "properties":{
+                  "text":{"type":"string"},
+                  "evidence_step_ids":{"type":"array","items":{"type":"string"}}
+                },
+                "required":["text","evidence_step_ids"]
+              }
+            },
+            "text_list":{
+              "type":"array",
+              "items":{"type":"string"}
+            }
+          }
+        }
+        """;
+
+    public static string For(LanguageModelCallPhase phase) =>
+        phase == LanguageModelCallPhase.Finalization ? FinalizationSchema : PlanningSchema;
 }
 
 internal static class OpenAiDecisionParser
@@ -130,6 +378,7 @@ internal static class OpenAiDecisionParser
         {
             throw new LanguageModelException(
                 "The language model returned an invalid decision.",
+                LanguageModelFailureCategory.InvalidModelResponse,
                 exception);
         }
     }

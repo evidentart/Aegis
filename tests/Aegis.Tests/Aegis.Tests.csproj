@@ -17,6 +17,7 @@
     <PackageReference Include="OpenAI" Version="2.12.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <Compile Include="..\..\src\Aegis\OpenAiLanguageModel.cs" Link="OpenAiLanguageModel.cs" />
+    <Compile Include="..\..\src\Aegis\UnavailableLanguageModel.cs" Link="UnavailableLanguageModel.cs" />
     <Compile Include="..\..\src\Aegis\WindowsSystemInfoObservationTool.cs" Link="WindowsSystemInfoObservationTool.cs" />
     <Compile Include="..\..\src\Aegis\WindowsPerformanceSystemObservationTool.cs" Link="WindowsPerformanceSystemObservationTool.cs" />
     <Compile Include="..\..\src\Aegis\WindowsPerformanceTopProcessesObservationTool.cs" Link="WindowsPerformanceTopProcessesObservationTool.cs" />

@@ -10,12 +10,17 @@ public sealed class PlanningContextTests
     {
         var model = new CapturingLanguageModel();
         var planner = new LanguageModelInvestigationPlanner(model);
-        var state = CreateState();
+        var state = CreateState() with
+        {
+            Question = "User question wording",
+            Objective = "Authoritative runtime objective"
+        };
 
         await planner.CreatePlanAsync(state);
 
+        var messages = model.LastRequest!.Messages;
         var systemInstruction = Assert.Single(
-                model.LastRequest!.Messages,
+                messages,
                 message => message.Role == LanguageModelMessageRole.System)
             .Content;
         Assert.Contains("windows.performance.system", systemInstruction);
@@ -28,6 +33,44 @@ public sealed class PlanningContextTests
         Assert.Contains("process control", systemInstruction);
         Assert.Contains("exact registered ToolIds", systemInstruction);
         Assert.Contains("runtime decides", systemInstruction);
+        Assert.Contains("The first User message is the runtime-owned authoritative investigation objective.", systemInstruction);
+        Assert.Contains("Copy the first User message exactly", systemInstruction);
+        Assert.Contains("MaximumObservationExecutions - ObservationsUsed = 3", systemInstruction);
+        Assert.Contains("Return a plan with at least one step. Its step count must not exceed 3.", systemInstruction);
+        Assert.DoesNotContain("Authoritative runtime objective", systemInstruction);
+        Assert.Equal(LanguageModelMessageRole.User, messages[1].Role);
+        Assert.Equal("Authoritative runtime objective", messages[1].Content);
+    }
+
+    [Fact]
+    public async Task ReplanningContextRepeatsTheAuthoritativeObjectiveExactly()
+    {
+        var model = new CapturingLanguageModel();
+        var planner = new LanguageModelInvestigationPlanner(model);
+        var state = CreateState() with
+        {
+            Question = "Replan question wording",
+            Objective = "Replan authoritative runtime objective",
+            Budget = new InvestigationBudget(3, 2),
+            ReplanCount = 1,
+            ExecutionPhase = InvestigationExecutionPhase.Replanning
+        };
+
+        await planner.CreatePlanAsync(state);
+
+        Assert.Equal(LanguageModelCallPhase.Replanning, model.LastRequest!.Phase);
+        var messages = model.LastRequest.Messages;
+        var systemInstruction = Assert.Single(
+                messages,
+                message => message.Role == LanguageModelMessageRole.System)
+            .Content;
+        Assert.Contains("The first User message is the runtime-owned authoritative investigation objective.", systemInstruction);
+        Assert.Contains("Copy the first User message exactly", systemInstruction);
+        Assert.Contains("MaximumObservationExecutions - ObservationsUsed = 1", systemInstruction);
+        Assert.Contains("Return a plan with at least one step. Its step count must not exceed 1.", systemInstruction);
+        Assert.DoesNotContain("Replan authoritative runtime objective", systemInstruction);
+        Assert.Equal(LanguageModelMessageRole.User, messages[1].Role);
+        Assert.Equal("Replan authoritative runtime objective", messages[1].Content);
     }
 
     private static InvestigationState CreateState() =>

@@ -28,12 +28,7 @@ public sealed class AgentRuntime
         string question,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(question))
-        {
-            throw new ArgumentException("A question is required.", nameof(question));
-        }
-
-        var normalizedQuestion = question.Trim();
+        var normalizedQuestion = InvestigationInputValidator.NormalizeQuestion(question);
         var investigationId = Guid.NewGuid();
         var createdAtUtc = DateTimeOffset.UtcNow;
         var state = new InvestigationState(
@@ -397,7 +392,10 @@ public sealed class AgentRuntime
         {
             InvestigationReportValidator.Validate(
                 finalAnswer.Report,
-                state.Evidence.Select(evidence => evidence.StepId).ToHashSet(StringComparer.Ordinal));
+                state.Evidence
+                    .Where(evidence => evidence.Result.Status == ObservationStatus.Succeeded)
+                    .Select(evidence => evidence.StepId)
+                    .ToHashSet(StringComparer.Ordinal));
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentNullException)
         {

@@ -48,10 +48,27 @@ public sealed partial class MainWindow : Window
         {
             StatusTextBlock.Text = exception.Message;
         }
-        catch (LanguageModelException)
+        catch (LanguageModelException exception)
         {
             _logger.LogWarning("Investigation request failed.");
-            StatusTextBlock.Text = "Investigation is unavailable right now.";
+            StatusTextBlock.Text = exception.Category switch
+            {
+                LanguageModelFailureCategory.ProviderNotConfigured =>
+                    "OpenAI is not configured. Set AEGIS_OPENAI_API_KEY for local development.",
+                LanguageModelFailureCategory.AuthenticationRejected =>
+                    "OpenAI authentication was rejected.",
+                LanguageModelFailureCategory.ProviderUnavailable =>
+                    "OpenAI could not be reached right now.",
+                LanguageModelFailureCategory.StructuredOutputFailure =>
+                    "OpenAI did not accept the requested response format.",
+                LanguageModelFailureCategory.InvalidModelResponse =>
+                    "OpenAI returned an unusable investigation response.",
+                _ => "Investigation is unavailable right now."
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            StatusTextBlock.Text = "Investigation cancelled.";
         }
         catch (AgentRuntimeException)
         {

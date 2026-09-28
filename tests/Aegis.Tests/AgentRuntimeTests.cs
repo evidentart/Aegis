@@ -47,6 +47,11 @@ public sealed class AgentRuntimeTests
         Assert.Contains("evidence_step_ids", finalSystemInstruction);
         Assert.Contains("structural citations", finalSystemInstruction);
         Assert.Contains("single performance snapshot cannot prove sustained behavior", finalSystemInstruction);
+        Assert.Contains("Do not infer Windows marketing or product names", finalSystemInstruction);
+        Assert.Contains("Report the observed platform, version, and build literally instead", finalSystemInstruction);
+        Assert.Contains("overall memory pressure or usage as high merely because individual processes have large working sets", finalSystemInstruction);
+        Assert.Contains("observed aggregate memory-load metric", finalSystemInstruction);
+        Assert.Contains("Keep per-process memory usage distinct from system-wide memory pressure", finalSystemInstruction);
         Assert.DoesNotContain("\"answer\"", finalSystemInstruction);
     }
 
@@ -98,6 +103,25 @@ public sealed class AgentRuntimeTests
             planner,
             model,
             new FakeObservationTool("tool.one", data: new TestObservationData("observed")));
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+    }
+
+    [Fact]
+    public async Task RejectsFactualCitationToFailedObservation()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision(CreateReport("step-1")));
+        var tool = new FakeObservationTool(
+            "tool.one",
+            result: new ObservationResult(
+                Guid.Empty,
+                "tool.one",
+                DateTimeOffset.UtcNow,
+                ObservationStatus.Failed,
+                Failure: new ObservationFailure("observation_failed", "Unavailable.")));
+        var runtime = CreateRuntime(planner, model, tool);
 
         await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
     }
@@ -198,6 +222,30 @@ public sealed class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task SerializesAuthoritativeStepIdsForRepeatedToolEvidence()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationPlanDecision(CreatePlan("step-2")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision("Final answer."));
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")));
+
+        await runtime.RunAsync("Question");
+
+        var evidence = model.Requests.Single().Messages
+            .Where(message => message.Role == LanguageModelMessageRole.Observation)
+            .Select(message => message.Content)
+            .ToArray();
+        Assert.Equal(2, evidence.Length);
+        Assert.Contains(evidence, content => content.Contains("\"step_id\":\"step-1\"", StringComparison.Ordinal));
+        Assert.Contains(evidence, content => content.Contains("\"step_id\":\"step-2\"", StringComparison.Ordinal));
+        Assert.All(evidence, content => Assert.Contains("\"tool_id\":\"tool.one\"", content));
+    }
+
+    [Fact]
     public async Task SerializesRecentEventEnumValuesAsNamesInModelEvidence()
     {
         var planner = new FakePlanner(
@@ -293,8 +341,11 @@ public sealed class AgentRuntimeTests
         var tool = new FakeObservationTool("tool.one");
         var runtime = CreateRuntime(planner, model, tool);
 
-        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+        var exception = await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
 
+        Assert.Equal(
+            "The investigation plan objective must match the authoritative investigation objective.",
+            exception.Message);
         Assert.Equal(0, tool.InvocationCount);
     }
 
