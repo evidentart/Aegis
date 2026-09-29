@@ -222,6 +222,187 @@ public sealed class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task FinalizeNowCompletesFromPlanZeroEvidenceWithoutPlanOne()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationReplanDecision.FinalizeNow());
+        var model = new FakeLanguageModel(new FinalAnswerDecision(CreateReport("step-1")));
+        var store = new RecordingHistoryStore();
+        var tool = new FakeObservationTool(
+            "tool.one",
+            data: new TestObservationData("observed"));
+        var runtime = CreateRuntime(planner, model, tool, store);
+
+        var result = await runtime.RunAsync("Question");
+
+        Assert.Equal("Summary", result.Report.Summary);
+        Assert.Equal(1, tool.InvocationCount);
+        Assert.Equal(2, planner.States.Count);
+        Assert.Equal(1, planner.States[1].Budget.ObservationsUsed);
+        Assert.Equal(1, planner.States[1].ReplanCount);
+        Assert.Single(model.Requests);
+        Assert.Contains("plan:0", store.Events);
+        Assert.Contains("step:step-1", store.Events);
+        Assert.DoesNotContain("plan:1", store.Events);
+        Assert.Equal("terminal:Completed", store.Events[^1]);
+    }
+
+    [Fact]
+    public async Task FinalizeNowStillValidatesFinalReportEvidence()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationReplanDecision.FinalizeNow());
+        var invalidReport = new InvestigationReport(
+            "Summary",
+            [new EvidenceStatement("Observed fact", [])],
+            [],
+            [],
+            [],
+            []);
+        var model = new FakeLanguageModel(new FinalAnswerDecision(invalidReport));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one", data: new TestObservationData("observed")),
+            store);
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+
+        Assert.Equal(1, store.TerminalCommitCount);
+        Assert.Equal("terminal:Failed", store.Events[^1]);
+        Assert.Equal(
+            "investigation_failed_agent_runtime_finalizing",
+            store.LastTerminalOutcome?.FailureCode);
+        Assert.DoesNotContain("plan:1", store.Events);
+    }
+
+    [Fact]
+    public async Task RevisedPlanWithFreshStepIdsPersistsAndExecutesPlanOne()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationPlanDecision(CreatePlan("step-2")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision(CreateReport("step-2")));
+        var store = new RecordingHistoryStore();
+        var tool = new FakeObservationTool("tool.one", data: new TestObservationData("observed"));
+        var runtime = CreateRuntime(planner, model, tool, store);
+
+        await runtime.RunAsync("Question");
+
+        Assert.Equal(2, tool.InvocationCount);
+        Assert.Contains("plan:0", store.Events);
+        Assert.Contains("plan:1", store.Events);
+        Assert.Contains("step:step-2", store.Events);
+        Assert.Equal("terminal:Completed", store.Events[^1]);
+    }
+
+    [Fact]
+    public async Task ReplanReusingPlanZeroStepIdStillFailsClosed()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationReplanDecision.RevisedPlan(CreatePlan("step-1")));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            planner,
+            new FakeLanguageModel(new FinalAnswerDecision("Never reached.")),
+            new FakeObservationTool("tool.one"),
+            store);
+
+        var exception = await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+
+        Assert.Equal(
+            "The investigation plan contains an invalid or duplicate step ID.",
+            exception.Message);
+        Assert.DoesNotContain("plan:1", store.Events);
+        Assert.Equal("investigation_failed_agent_runtime_replanning", store.LastTerminalOutcome?.FailureCode);
+    }
+
+    [Fact]
+    public async Task ReplanExceedingRemainingBudgetStillFailsClosed()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2")),
+            new InvestigationReplanDecision.RevisedPlan(CreatePlan("step-3", "step-4")));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            planner,
+            new FakeLanguageModel(new FinalAnswerDecision("Never reached.")),
+            new FakeObservationTool("tool.one"),
+            store);
+
+        var exception = await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+
+        Assert.Equal("The investigation plan exceeds the remaining observation budget.", exception.Message);
+        Assert.DoesNotContain("plan:1", store.Events);
+    }
+
+    [Fact]
+    public async Task ReplanObjectiveMismatchStillFailsClosed()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationReplanDecision.RevisedPlan(
+                new InvestigationPlan("Different objective", [new InvestigationStep("step-2", "tool.one")])));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            planner,
+            new FakeLanguageModel(new FinalAnswerDecision("Never reached.")),
+            new FakeObservationTool("tool.one"),
+            store);
+
+        var exception = await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+
+        Assert.Equal(
+            "The investigation plan objective must match the authoritative investigation objective.",
+            exception.Message);
+        Assert.DoesNotContain("plan:1", store.Events);
+    }
+
+    [Fact]
+    public async Task ReplanUnknownToolIdStillFailsClosed()
+    {
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new InvestigationReplanDecision.RevisedPlan(CreatePlan(["step-2"], "unknown.tool")));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            planner,
+            new FakeLanguageModel(new FinalAnswerDecision("Never reached.")),
+            new FakeObservationTool("tool.one"),
+            store);
+
+        var exception = await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+
+        Assert.Contains("unavailable observation tool", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("plan:1", store.Events);
+    }
+
+    [Fact]
+    public async Task DirectFinalAnswerDecisionDuringReplanningIsRejected()
+    {
+        var model = new FakeLanguageModel(
+            new InvestigationPlanDecision(CreatePlan("step-1")),
+            new FinalAnswerDecision("Must not be persisted."));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            new LanguageModelInvestigationPlanner(model),
+            model,
+            new FakeObservationTool("tool.one"),
+            store);
+
+        await Assert.ThrowsAsync<AgentRuntimeException>(() => runtime.RunAsync("Question"));
+
+        Assert.Equal("investigation_failed_agent_runtime_replanning", store.LastTerminalOutcome?.FailureCode);
+        Assert.DoesNotContain("plan:1", store.Events);
+        Assert.Null(store.LastTerminalOutcome?.FinalAnswer);
+        Assert.Null(store.LastTerminalOutcome?.Report);
+    }
+
+    [Fact]
     public async Task SerializesAuthoritativeStepIdsForRepeatedToolEvidence()
     {
         var planner = new FakePlanner(
@@ -515,6 +696,92 @@ public sealed class AgentRuntimeTests
     }
 
     [Fact]
+    public async Task InitialPlanningFailurePersistsBoundedLanguageModelClassification()
+    {
+        const string sensitiveProviderBody = "SENSITIVE_PROVIDER_BODY_MUST_NOT_PERSIST";
+        var model = new FakeLanguageModel(
+            new LanguageModelException(
+                sensitiveProviderBody,
+                LanguageModelFailureCategory.ProviderRejected,
+                providerStatusCode: 400));
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            new LanguageModelInvestigationPlanner(model),
+            model,
+            new FakeObservationTool("tool.one"),
+            store);
+
+        await Assert.ThrowsAsync<LanguageModelException>(() => runtime.RunAsync("Question"));
+
+        Assert.NotNull(store.LastTerminalOutcome);
+        var outcome = store.LastTerminalOutcome!;
+        Assert.Equal(
+            "investigation_failed_language_model_planning_provider_rejected",
+            outcome.FailureCode);
+        Assert.Equal(
+            "Investigation failed during initial planning because of language-model category provider rejected. Provider status: 400.",
+            outcome.FailureMessage);
+        Assert.DoesNotContain(sensitiveProviderBody, outcome.FailureCode);
+        Assert.DoesNotContain(sensitiveProviderBody, outcome.FailureMessage);
+    }
+
+    [Fact]
+    public async Task ReplanningFailurePersistsBoundedLanguageModelClassification()
+    {
+        var providerFailure = new LanguageModelException(
+            "provider failure",
+            LanguageModelFailureCategory.ProviderUnavailable);
+        var model = new FailingAfterInitialPlanLanguageModel(
+            CreatePlan("step-1"),
+            providerFailure);
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            new LanguageModelInvestigationPlanner(model),
+            model,
+            new FakeObservationTool("tool.one"),
+            store);
+
+        await Assert.ThrowsAsync<LanguageModelException>(() => runtime.RunAsync("Question"));
+
+        Assert.NotNull(store.LastTerminalOutcome);
+        var outcome = store.LastTerminalOutcome!;
+        Assert.Equal(
+            "investigation_failed_language_model_replanning_provider_unavailable",
+            outcome.FailureCode);
+        Assert.Equal(
+            "Investigation failed during replanning because of language-model category provider unavailable.",
+            outcome.FailureMessage);
+    }
+
+    [Fact]
+    public async Task FinalizationFailurePersistsBoundedLanguageModelClassification()
+    {
+        var providerFailure = new LanguageModelException(
+            "provider failure",
+            LanguageModelFailureCategory.Unknown);
+        var model = new FailingAfterInitialPlanLanguageModel(
+            CreatePlan("step-1", "step-2", "step-3"),
+            providerFailure);
+        var store = new RecordingHistoryStore();
+        var runtime = CreateRuntime(
+            new LanguageModelInvestigationPlanner(model),
+            model,
+            new FakeObservationTool("tool.one"),
+            store);
+
+        await Assert.ThrowsAsync<LanguageModelException>(() => runtime.RunAsync("Question"));
+
+        Assert.NotNull(store.LastTerminalOutcome);
+        var outcome = store.LastTerminalOutcome!;
+        Assert.Equal(
+            "investigation_failed_language_model_finalizing_unknown",
+            outcome.FailureCode);
+        Assert.Equal(
+            "Investigation failed during finalization because of language-model category unknown.",
+            outcome.FailureMessage);
+    }
+
+    [Fact]
     public async Task RejectsNonPlanDecisionFromModelBackedPlanner()
     {
         var model = new FakeLanguageModel(new FinalAnswerDecision("Not a plan."));
@@ -615,6 +882,40 @@ public sealed class AgentRuntimeTests
         Assert.Equal(1, store.TerminalCommitCount);
         Assert.Equal(1, store.Events.Count(eventName => eventName == "terminal:Failed"));
         Assert.DoesNotContain("terminal:Completed", store.Events);
+        Assert.Equal("terminal:Failed", store.Events[^1]);
+        Assert.Equal(
+            "investigation_failed_agent_runtime_finalizing",
+            store.LastTerminalOutcome?.FailureCode);
+    }
+
+    [Fact]
+    public async Task UnexpectedExecutionFailurePersistsOnlyBoundedClassification()
+    {
+        const string sensitiveExceptionMessage = "SENSITIVE_PROVIDER_BODY_MUST_NOT_PERSIST";
+        var planner = new FakePlanner(
+            new InvestigationPlanDecision(CreatePlan("step-1", "step-2", "step-3")));
+        var model = new FakeLanguageModel(new FinalAnswerDecision("Never reached."));
+        var store = new RecordingHistoryStore
+        {
+            ExecutionException = new InvalidOperationException(sensitiveExceptionMessage)
+        };
+        var runtime = CreateRuntime(
+            planner,
+            model,
+            new FakeObservationTool("tool.one"),
+            store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => runtime.RunAsync("Question"));
+
+        Assert.NotNull(store.LastTerminalOutcome);
+        var outcome = store.LastTerminalOutcome!;
+        Assert.Equal("investigation_failed_unexpected_executing", outcome.FailureCode);
+        Assert.Equal(
+            "Investigation failed during observation execution because of an unexpected runtime error.",
+            outcome.FailureMessage);
+        Assert.DoesNotContain(sensitiveExceptionMessage, outcome.FailureCode);
+        Assert.DoesNotContain(sensitiveExceptionMessage, outcome.FailureMessage);
+        Assert.Equal(1, store.TerminalCommitCount);
         Assert.Equal("terminal:Failed", store.Events[^1]);
     }
 
@@ -718,10 +1019,19 @@ public sealed class AgentRuntimeTests
     {
         private readonly Queue<InvestigationPlanDecision> _decisions;
         private readonly CancellationToken? _cancellationToken;
+        private readonly InvestigationReplanDecision? _replanDecision;
 
         public FakePlanner(params InvestigationPlanDecision[] decisions)
         {
             _decisions = new Queue<InvestigationPlanDecision>(decisions);
+        }
+
+        public FakePlanner(
+            InvestigationPlanDecision initialDecision,
+            InvestigationReplanDecision replanDecision)
+        {
+            _decisions = new Queue<InvestigationPlanDecision>([initialDecision]);
+            _replanDecision = replanDecision;
         }
 
         public FakePlanner(CancellationToken cancellationToken)
@@ -758,6 +1068,32 @@ public sealed class AgentRuntimeTests
             }
 
             return Task.FromResult(_decisions.Dequeue());
+        }
+
+        public Task<InvestigationReplanDecision> CreateReplanDecisionAsync(
+            InvestigationState state,
+            CancellationToken cancellationToken = default)
+        {
+            States.Add(state);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_replanDecision is not null)
+            {
+                return Task.FromResult(_replanDecision);
+            }
+
+            if (_cancellationToken is { } token &&
+                (_decisions.Count == 0 || States.Count > 1))
+            {
+                throw new OperationCanceledException(token);
+            }
+
+            if (_decisions.Count == 0)
+            {
+                throw new InvalidOperationException("No fake replan decision is available.");
+            }
+
+            return Task.FromResult<InvestigationReplanDecision>(
+                new InvestigationReplanDecision.RevisedPlan(_decisions.Dequeue().Plan));
         }
     }
 
@@ -796,6 +1132,34 @@ public sealed class AgentRuntimeTests
             }
 
             return Task.FromResult(_decisions.Dequeue());
+        }
+    }
+
+    private sealed class FailingAfterInitialPlanLanguageModel : ILanguageModel
+    {
+        private readonly InvestigationPlan _initialPlan;
+        private readonly Exception _exception;
+        private int _callCount;
+
+        public FailingAfterInitialPlanLanguageModel(
+            InvestigationPlan initialPlan,
+            Exception exception)
+        {
+            _initialPlan = initialPlan;
+            _exception = exception;
+        }
+
+        public Task<AgentDecision> CompleteAsync(
+            LanguageModelRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Interlocked.Increment(ref _callCount) == 1)
+            {
+                return Task.FromResult<AgentDecision>(new InvestigationPlanDecision(_initialPlan));
+            }
+
+            throw _exception;
         }
     }
 
@@ -861,6 +1225,8 @@ public sealed class AgentRuntimeTests
         public int TerminalCommitCount { get; private set; }
         public Exception? CreateException { get; init; }
         public Exception? TerminalException { get; init; }
+        public Exception? ExecutionException { get; init; }
+        public InvestigationOutcome? LastTerminalOutcome { get; private set; }
 
         public Task CreateAsync(Investigation investigation, CancellationToken cancellationToken = default)
         {
@@ -887,6 +1253,11 @@ public sealed class AgentRuntimeTests
 
         public Task AppendStepExecutionAsync(Guid investigationId, InvestigationStepExecution execution, CancellationToken cancellationToken = default)
         {
+            if (ExecutionException is not null)
+            {
+                throw ExecutionException;
+            }
+
             Events.Add($"step:{execution.StepId}");
             return Task.CompletedTask;
         }
@@ -903,6 +1274,7 @@ public sealed class AgentRuntimeTests
         {
             TerminalCommitCount++;
             Events.Add($"terminal:{terminalStatus}");
+            LastTerminalOutcome = outcome;
             if (TerminalException is not null)
             {
                 throw TerminalException;
@@ -916,5 +1288,19 @@ public sealed class AgentRuntimeTests
 
         public Task<InvestigationDetails?> GetAsync(Guid investigationId, CancellationToken cancellationToken = default) =>
             Task.FromResult<InvestigationDetails?>(null);
+
+        public Task<InvestigationDeletionResult> DeleteInvestigationAsync(
+            Guid investigationId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new InvestigationDeletionResult(
+                investigationId,
+                InvestigationDeletionStatus.NotFound));
+
+        public Task<ClearHistoryResult> ClearHistoryAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ClearHistoryResult(0, 0, 0));
+
+        public Task<ClearSavedHistoryAndBaselinesResult> ClearSavedHistoryAndBaselinesAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ClearSavedHistoryAndBaselinesResult(0, 0, 0));
     }
 }

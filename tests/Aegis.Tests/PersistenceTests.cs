@@ -539,6 +539,492 @@ public sealed class PersistenceTests
         Assert.Equal(InvestigationStepStatus.Pending, await GetStepStatusAsync(fixture));
     }
 
+    [Fact]
+    public async Task DeletesCompletedInvestigationAndAllCoreHistoryRows()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(fixture));
+        await CommitCompletedAsync(fixture);
+
+        var result = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+
+        Assert.Equal(InvestigationDeletionStatus.Deleted, result.Status);
+        Assert.Null(await fixture.Store.GetAsync(fixture.InvestigationId));
+        Assert.Empty(await fixture.Store.ListAsync());
+        Assert.Equal(0, fixture.CountRows("Investigations"));
+        Assert.Equal(0, fixture.CountRows("Plans"));
+        Assert.Equal(0, fixture.CountRows("PlanSteps"));
+        Assert.Equal(0, fixture.CountRows("StepExecutions"));
+        Assert.Equal(0, fixture.CountRows("Observations"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Theory]
+    [InlineData(InvestigationLifecycleStatus.Failed)]
+    [InlineData(InvestigationLifecycleStatus.Cancelled)]
+    public async Task DeletesFailedAndCancelledInvestigations(
+        InvestigationLifecycleStatus terminalStatus)
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        await CommitTerminalAsync(
+            fixture,
+            terminalStatus,
+            new InvestigationOutcome(FailureCode: terminalStatus.ToString()));
+
+        var result = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+
+        Assert.Equal(InvestigationDeletionStatus.Deleted, result.Status);
+        Assert.Null(await fixture.Store.GetAsync(fixture.InvestigationId));
+    }
+
+    [Fact]
+    public async Task RejectsCreatedInvestigationWithoutChangingIt()
+    {
+        using var fixture = new DatabaseFixture();
+        await CreateInvestigationAsync(fixture.Store, fixture.InvestigationId);
+
+        var result = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+
+        Assert.Equal(InvestigationDeletionStatus.NotTerminal, result.Status);
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.InvestigationId));
+        Assert.Equal(1, fixture.CountRows("Investigations"));
+    }
+
+    [Fact]
+    public async Task RejectsRunningInvestigationWithoutChangingIt()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+
+        var result = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+
+        Assert.Equal(InvestigationDeletionStatus.NotTerminal, result.Status);
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.InvestigationId));
+        Assert.Equal(1, fixture.CountRows("Plans"));
+        Assert.Equal(1, fixture.CountRows("PlanSteps"));
+    }
+
+    [Fact]
+    public async Task ReturnsNotFoundForUnknownAndAlreadyDeletedInvestigations()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        var unknownResult = await fixture.Store.DeleteInvestigationAsync(Guid.NewGuid());
+
+        Assert.Equal(InvestigationDeletionStatus.NotFound, unknownResult.Status);
+        await CommitCompletedAsync(fixture);
+        var firstDelete = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+        var secondDelete = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+
+        Assert.Equal(InvestigationDeletionStatus.Deleted, firstDelete.Status);
+        Assert.Equal(InvestigationDeletionStatus.NotFound, secondDelete.Status);
+    }
+
+    [Fact]
+    public async Task PreservesBaselineAndSourceInvestigationWhenDeletingIsBlocked()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        var execution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(fixture.InvestigationId, execution);
+        await CommitCompletedAsync(fixture);
+        await fixture.Store.CreateAsync(CreateBaseline(fixture, "step-1", execution.Result!));
+
+        var result = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+
+        Assert.Equal(InvestigationDeletionStatus.BaselineProtected, result.Status);
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.InvestigationId));
+        var baseline = Assert.Single(await fixture.Store.ListBaselinesAsync());
+        Assert.Equal(fixture.InvestigationId, baseline.SourceInvestigationId);
+        Assert.Equal(1, fixture.CountRows("Baselines"));
+    }
+
+    [Fact]
+    public async Task ClearHistoryDeletesEligibleRowsAndPreservesProtectedAndNonTerminalRows()
+    {
+        using var fixture = new DatabaseFixture();
+        var eligibleId = Guid.NewGuid();
+        var protectedId = Guid.NewGuid();
+        var runningId = Guid.NewGuid();
+        var createdId = Guid.NewGuid();
+
+        await PrepareInvestigationAsync(fixture.Store, eligibleId);
+        await CommitTerminalAsync(
+            fixture.Store,
+            eligibleId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "Eligible."));
+
+        await PrepareInvestigationAsync(fixture.Store, protectedId);
+        var protectedExecution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(protectedId, protectedExecution);
+        await CommitTerminalAsync(
+            fixture.Store,
+            protectedId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "Protected."));
+        await fixture.Store.CreateAsync(
+            CreateBaseline(protectedId, "step-1", protectedExecution.Result!));
+
+        await PrepareInvestigationAsync(fixture.Store, runningId);
+        await CreateInvestigationAsync(fixture.Store, createdId);
+
+        var result = await fixture.Store.ClearHistoryAsync();
+
+        Assert.Equal(1, result.DeletedCount);
+        Assert.Equal(1, result.BaselineProtectedCount);
+        Assert.Equal(2, result.NonTerminalPreservedCount);
+        Assert.Null(await fixture.Store.GetAsync(eligibleId));
+        Assert.NotNull(await fixture.Store.GetAsync(protectedId));
+        Assert.NotNull(await fixture.Store.GetAsync(runningId));
+        Assert.NotNull(await fixture.Store.GetAsync(createdId));
+        Assert.Equal(1, fixture.CountRows("Baselines"));
+        Assert.Equal(protectedId, Assert.Single(await fixture.Store.ListBaselinesAsync()).SourceInvestigationId);
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task ClearHistoryReturnsZeroForEmptyHistory()
+    {
+        using var fixture = new DatabaseFixture();
+
+        var result = await fixture.Store.ClearHistoryAsync();
+
+        Assert.Equal(0, result.DeletedCount);
+        Assert.Equal(0, result.BaselineProtectedCount);
+        Assert.Equal(0, result.NonTerminalPreservedCount);
+    }
+
+    [Fact]
+    public async Task ClearHistoryPreservesAllBaselineProtectedInvestigations()
+    {
+        using var fixture = new DatabaseFixture();
+        var sourceIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
+        foreach (var sourceId in sourceIds)
+        {
+            await PrepareInvestigationAsync(fixture.Store, sourceId);
+            var execution = CreateExecution(fixture);
+            await fixture.Store.AppendStepExecutionAsync(sourceId, execution);
+            await CommitTerminalAsync(
+                fixture.Store,
+                sourceId,
+                InvestigationLifecycleStatus.Completed,
+                new InvestigationOutcome(FinalAnswer: "Protected."));
+            await fixture.Store.CreateAsync(CreateBaseline(sourceId, "step-1", execution.Result!));
+        }
+
+        var result = await fixture.Store.ClearHistoryAsync();
+
+        Assert.Equal(0, result.DeletedCount);
+        Assert.Equal(2, result.BaselineProtectedCount);
+        Assert.Equal(0, result.NonTerminalPreservedCount);
+        Assert.Equal(2, fixture.CountRows("Investigations"));
+        Assert.Equal(2, fixture.CountRows("Baselines"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task RollsBackSingleInvestigationDeletionWhenDependentDeleteFails()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(fixture));
+        await CommitCompletedAsync(fixture);
+        InstallInvestigationDeleteFailureTrigger(fixture);
+
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId));
+
+        Assert.Equal(1, fixture.CountRows("Investigations"));
+        Assert.Equal(1, fixture.CountRows("Plans"));
+        Assert.Equal(1, fixture.CountRows("PlanSteps"));
+        Assert.Equal(1, fixture.CountRows("StepExecutions"));
+        Assert.Equal(1, fixture.CountRows("Observations"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task RollsBackClearHistoryWhenDependentDeleteFails()
+    {
+        using var fixture = new DatabaseFixture();
+        var firstId = Guid.NewGuid();
+        var secondId = Guid.NewGuid();
+        await PrepareInvestigationAsync(fixture.Store, firstId);
+        await CommitTerminalAsync(
+            fixture.Store,
+            firstId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "First."));
+        await PrepareInvestigationAsync(fixture.Store, secondId);
+        await CommitTerminalAsync(
+            fixture.Store,
+            secondId,
+            InvestigationLifecycleStatus.Failed,
+            new InvestigationOutcome(FailureCode: "failed"));
+        InstallInvestigationDeleteFailureTrigger(fixture);
+
+        await Assert.ThrowsAsync<SqliteException>(() => fixture.Store.ClearHistoryAsync());
+
+        Assert.Equal(2, fixture.CountRows("Investigations"));
+        Assert.Equal(2, fixture.CountRows("Plans"));
+        Assert.Equal(2, fixture.CountRows("PlanSteps"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task DeletesBaselineWithoutChangingSourceOrUnrelatedHistory()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        var sourceExecution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(fixture.InvestigationId, sourceExecution);
+        await CommitCompletedAsync(fixture);
+
+        var unrelatedId = Guid.NewGuid();
+        await PrepareInvestigationAsync(fixture.Store, unrelatedId);
+        await CommitTerminalAsync(
+            fixture.Store,
+            unrelatedId,
+            InvestigationLifecycleStatus.Failed,
+            new InvestigationOutcome(FailureCode: "unrelated"));
+        await fixture.Store.CreateAsync(
+            CreateBaseline(fixture.InvestigationId, "step-1", sourceExecution.Result!));
+        var baseline = Assert.Single(await fixture.Store.ListBaselinesAsync());
+
+        var result = await fixture.Store.DeleteBaselineAsync(baseline.BaselineId);
+
+        Assert.Equal(BaselineDeletionStatus.Deleted, result.Status);
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.InvestigationId));
+        Assert.NotNull(await fixture.Store.GetAsync(unrelatedId));
+        Assert.Empty(await fixture.Store.ListBaselinesAsync());
+        Assert.Equal(2, fixture.CountRows("Investigations"));
+        Assert.Equal(2, fixture.CountRows("Plans"));
+        Assert.Equal(1, fixture.CountRows("Observations"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task BaselineDeletionReturnsNotFoundForUnknownAndDuplicateIds()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        var execution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(fixture.InvestigationId, execution);
+        await CommitCompletedAsync(fixture);
+        await fixture.Store.CreateAsync(
+            CreateBaseline(fixture.InvestigationId, "step-1", execution.Result!));
+        var baseline = Assert.Single(await fixture.Store.ListBaselinesAsync());
+
+        var unknownResult = await fixture.Store.DeleteBaselineAsync(Guid.NewGuid());
+        var firstResult = await fixture.Store.DeleteBaselineAsync(baseline.BaselineId);
+        var secondResult = await fixture.Store.DeleteBaselineAsync(baseline.BaselineId);
+
+        Assert.Equal(BaselineDeletionStatus.NotFound, unknownResult.Status);
+        Assert.Equal(BaselineDeletionStatus.Deleted, firstResult.Status);
+        Assert.Equal(BaselineDeletionStatus.NotFound, secondResult.Status);
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.InvestigationId));
+    }
+
+    [Fact]
+    public async Task DeletingOneOfMultipleBaselinesKeepsSourceProtectedUntilFinalReferenceIsRemoved()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        var execution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(fixture.InvestigationId, execution);
+        await CommitCompletedAsync(fixture);
+        await fixture.Store.CreateAsync(
+            CreateBaseline(fixture.InvestigationId, "step-1", execution.Result!));
+        await fixture.Store.CreateAsync(
+            CreateBaseline(fixture.InvestigationId, "step-1", execution.Result!));
+        var baselines = (await fixture.Store.ListBaselinesAsync()).ToArray();
+
+        var firstResult = await fixture.Store.DeleteBaselineAsync(baselines[0].BaselineId);
+        var protectedResult = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+        var remainingBaseline = Assert.Single(await fixture.Store.ListBaselinesAsync());
+        var secondResult = await fixture.Store.DeleteBaselineAsync(remainingBaseline.BaselineId);
+        var deleteSourceResult = await fixture.Store.DeleteInvestigationAsync(fixture.InvestigationId);
+
+        Assert.Equal(BaselineDeletionStatus.Deleted, firstResult.Status);
+        Assert.Equal(InvestigationDeletionStatus.BaselineProtected, protectedResult.Status);
+        Assert.Equal(BaselineDeletionStatus.Deleted, secondResult.Status);
+        Assert.Equal(InvestigationDeletionStatus.Deleted, deleteSourceResult.Status);
+        Assert.Null(await fixture.Store.GetAsync(fixture.InvestigationId));
+        Assert.Empty(await fixture.Store.ListBaselinesAsync());
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task RollsBackBaselineDeletionWhenTheDeleteFails()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        var execution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(fixture.InvestigationId, execution);
+        await CommitCompletedAsync(fixture);
+        await fixture.Store.CreateAsync(
+            CreateBaseline(fixture.InvestigationId, "step-1", execution.Result!));
+        var baseline = Assert.Single(await fixture.Store.ListBaselinesAsync());
+        InstallBaselineDeleteFailureTrigger(fixture);
+
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            fixture.Store.DeleteBaselineAsync(baseline.BaselineId));
+
+        Assert.Single(await fixture.Store.ListBaselinesAsync());
+        Assert.NotNull(await fixture.Store.GetAsync(fixture.InvestigationId));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task ClearHistoryCanDeleteSourceAfterItsFinalBaselineIsDeleted()
+    {
+        using var fixture = await CreatePreparedFixtureAsync();
+        var execution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(fixture.InvestigationId, execution);
+        await CommitCompletedAsync(fixture);
+        await fixture.Store.CreateAsync(
+            CreateBaseline(fixture.InvestigationId, "step-1", execution.Result!));
+        var baseline = Assert.Single(await fixture.Store.ListBaselinesAsync());
+
+        Assert.Equal(
+            BaselineDeletionStatus.Deleted,
+            (await fixture.Store.DeleteBaselineAsync(baseline.BaselineId)).Status);
+        var result = await fixture.Store.ClearHistoryAsync();
+
+        Assert.Equal(1, result.DeletedCount);
+        Assert.Equal(0, result.BaselineProtectedCount);
+        Assert.Null(await fixture.Store.GetAsync(fixture.InvestigationId));
+        Assert.Empty(await fixture.Store.ListBaselinesAsync());
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task ClearSavedHistoryAndBaselinesDeletesAllSavedTerminalDataAndPreservesNonTerminalData()
+    {
+        using var fixture = new DatabaseFixture();
+        var eligibleId = Guid.NewGuid();
+        var protectedId = Guid.NewGuid();
+        var runningId = Guid.NewGuid();
+        var createdId = Guid.NewGuid();
+
+        await PrepareInvestigationAsync(fixture.Store, eligibleId);
+        await CommitTerminalAsync(
+            fixture.Store,
+            eligibleId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "Eligible."));
+
+        await PrepareInvestigationAsync(fixture.Store, protectedId);
+        var protectedExecution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(protectedId, protectedExecution);
+        await CommitTerminalAsync(
+            fixture.Store,
+            protectedId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "Protected."));
+        await fixture.Store.CreateAsync(
+            CreateBaseline(protectedId, "step-1", protectedExecution.Result!));
+        await fixture.Store.CreateAsync(
+            CreateBaseline(protectedId, "step-1", protectedExecution.Result!));
+
+        await PrepareInvestigationAsync(fixture.Store, runningId);
+        await CreateInvestigationAsync(fixture.Store, createdId);
+
+        var result = await fixture.Store.ClearSavedHistoryAndBaselinesAsync();
+
+        Assert.Equal(2, result.BaselinesDeletedCount);
+        Assert.Equal(2, result.InvestigationsDeletedCount);
+        Assert.Equal(2, result.NonTerminalPreservedCount);
+        Assert.Equal(0, fixture.CountRows("Baselines"));
+        Assert.Null(await fixture.Store.GetAsync(eligibleId));
+        Assert.Null(await fixture.Store.GetAsync(protectedId));
+        Assert.NotNull(await fixture.Store.GetAsync(runningId));
+        Assert.NotNull(await fixture.Store.GetAsync(createdId));
+        Assert.Equal(2, fixture.CountRows("Investigations"));
+        Assert.Equal(1, fixture.CountRows("Plans"));
+        Assert.Equal(0, fixture.CountRows("StepExecutions"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task ClearSavedHistoryAndBaselinesHandlesOnlyBaselineBackedSourceData()
+    {
+        using var fixture = new DatabaseFixture();
+        var sourceId = Guid.NewGuid();
+        await PrepareInvestigationAsync(fixture.Store, sourceId);
+        var execution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(sourceId, execution);
+        await CommitTerminalAsync(
+            fixture.Store,
+            sourceId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "Source."));
+        await fixture.Store.CreateAsync(CreateBaseline(sourceId, "step-1", execution.Result!));
+
+        var result = await fixture.Store.ClearSavedHistoryAndBaselinesAsync();
+
+        Assert.Equal(1, result.BaselinesDeletedCount);
+        Assert.Equal(1, result.InvestigationsDeletedCount);
+        Assert.Equal(0, result.NonTerminalPreservedCount);
+        Assert.Equal(0, fixture.CountRows("Investigations"));
+        Assert.Equal(0, fixture.CountRows("Baselines"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task ClearSavedHistoryAndBaselinesHandlesNonTerminalOnlyData()
+    {
+        using var fixture = new DatabaseFixture();
+        var runningId = Guid.NewGuid();
+        var createdId = Guid.NewGuid();
+        await PrepareInvestigationAsync(fixture.Store, runningId);
+        await CreateInvestigationAsync(fixture.Store, createdId);
+
+        var result = await fixture.Store.ClearSavedHistoryAndBaselinesAsync();
+
+        Assert.Equal(0, result.BaselinesDeletedCount);
+        Assert.Equal(0, result.InvestigationsDeletedCount);
+        Assert.Equal(2, result.NonTerminalPreservedCount);
+        Assert.Equal(2, fixture.CountRows("Investigations"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task ClearSavedHistoryAndBaselinesReturnsZeroForEmptyStorage()
+    {
+        using var fixture = new DatabaseFixture();
+
+        var result = await fixture.Store.ClearSavedHistoryAndBaselinesAsync();
+
+        Assert.Equal(0, result.BaselinesDeletedCount);
+        Assert.Equal(0, result.InvestigationsDeletedCount);
+        Assert.Equal(0, result.NonTerminalPreservedCount);
+        Assert.Equal(5, fixture.GetSchemaVersion());
+        AssertNoForeignKeyViolations(fixture);
+    }
+
+    [Fact]
+    public async Task RollsBackClearSavedHistoryAndBaselinesWhenTerminalCleanupFails()
+    {
+        using var fixture = new DatabaseFixture();
+        var sourceId = Guid.NewGuid();
+        await PrepareInvestigationAsync(fixture.Store, sourceId);
+        var execution = CreateExecution(fixture);
+        await fixture.Store.AppendStepExecutionAsync(sourceId, execution);
+        await CommitTerminalAsync(
+            fixture.Store,
+            sourceId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: "Source."));
+        await fixture.Store.CreateAsync(CreateBaseline(sourceId, "step-1", execution.Result!));
+        InstallInvestigationDeleteFailureTrigger(fixture);
+
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            fixture.Store.ClearSavedHistoryAndBaselinesAsync());
+
+        Assert.Equal(1, fixture.CountRows("Baselines"));
+        Assert.Equal(1, fixture.CountRows("Investigations"));
+        Assert.Equal(1, fixture.CountRows("Plans"));
+        Assert.Equal(1, fixture.CountRows("StepExecutions"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
     private static InvestigationStepExecution CreateExecution(
         DatabaseFixture fixture,
         Guid? requestId = null,
@@ -593,13 +1079,62 @@ public sealed class PersistenceTests
         command.ExecuteNonQuery();
     }
 
+    private static void InstallInvestigationDeleteFailureTrigger(DatabaseFixture fixture)
+    {
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TRIGGER FailInvestigationDelete
+            BEFORE DELETE ON Plans
+            BEGIN
+                SELECT RAISE(ABORT, 'forced investigation delete failure');
+            END;
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private static void InstallBaselineDeleteFailureTrigger(DatabaseFixture fixture)
+    {
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TRIGGER FailBaselineDelete
+            BEFORE DELETE ON Baselines
+            BEGIN
+                SELECT RAISE(ABORT, 'forced baseline delete failure');
+            END;
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private static void AssertNoForeignKeyViolations(DatabaseFixture fixture)
+    {
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var pragma = connection.CreateCommand();
+        pragma.CommandText = "PRAGMA foreign_keys = ON;";
+        pragma.ExecuteNonQuery();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA foreign_key_check;";
+        using var reader = command.ExecuteReader();
+        Assert.False(reader.Read());
+    }
+
     private static Baseline CreateBaseline(
         DatabaseFixture fixture,
         string sourceStepId,
         ObservationResult observation) =>
+        CreateBaseline(fixture.InvestigationId, sourceStepId, observation);
+
+    private static Baseline CreateBaseline(
+        Guid investigationId,
+        string sourceStepId,
+        ObservationResult observation) =>
         new(
             Guid.NewGuid(),
-            fixture.InvestigationId,
+            investigationId,
             sourceStepId,
             WindowsSystemInfoObservationTool.ToolId,
             DateTimeOffset.UtcNow,
@@ -616,11 +1151,60 @@ public sealed class PersistenceTests
         InvestigationLifecycleStatus status,
         InvestigationOutcome outcome)
     {
-        Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
-            fixture.InvestigationId,
+        await CommitTerminalAsync(fixture.Store, fixture.InvestigationId, status, outcome);
+    }
+
+    private static async Task CommitTerminalAsync(
+        SqliteInvestigationStore store,
+        Guid investigationId,
+        InvestigationLifecycleStatus status,
+        InvestigationOutcome outcome)
+    {
+        Assert.True(await store.CommitTerminalOutcomeAsync(
+            investigationId,
             status,
             outcome,
             DateTimeOffset.UtcNow));
+    }
+
+    private static async Task CreateInvestigationAsync(
+        SqliteInvestigationStore store,
+        Guid investigationId)
+    {
+        await store.CreateAsync(new Investigation(
+            investigationId,
+            "Question",
+            "Question",
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            InvestigationLifecycleStatus.Created,
+            null,
+            [],
+            []));
+    }
+
+    private static async Task PrepareInvestigationAsync(
+        SqliteInvestigationStore store,
+        Guid investigationId,
+        params string[] stepIds)
+    {
+        var preparedStepIds = stepIds.Length == 0 ? ["step-1"] : stepIds;
+        var createdAt = DateTimeOffset.UtcNow;
+        await CreateInvestigationAsync(store, investigationId);
+        await store.MarkRunningAsync(investigationId, createdAt.AddSeconds(1));
+        await store.AppendPlanAsync(
+            investigationId,
+            new InvestigationPlanHistoryEntry(
+                0,
+                createdAt.AddSeconds(2),
+                new InvestigationPlan(
+                    "Question",
+                    preparedStepIds
+                        .Select(stepId => new InvestigationStep(
+                            stepId,
+                            WindowsSystemInfoObservationTool.ToolId))
+                        .ToArray())));
     }
 
     private static async Task<InvestigationStepStatus> GetStepStatusAsync(DatabaseFixture fixture)
@@ -634,32 +1218,7 @@ public sealed class PersistenceTests
         var fixture = new DatabaseFixture();
         try
         {
-            var createdAt = DateTimeOffset.UtcNow;
-            var preparedStepIds = stepIds.Length == 0 ? ["step-1"] : stepIds;
-            await fixture.Store.CreateAsync(new Investigation(
-                fixture.InvestigationId,
-                "Question",
-                "Question",
-                createdAt,
-                null,
-                null,
-                InvestigationLifecycleStatus.Created,
-                null,
-                [],
-                []));
-            await fixture.Store.MarkRunningAsync(fixture.InvestigationId, createdAt.AddSeconds(1));
-            await fixture.Store.AppendPlanAsync(
-                fixture.InvestigationId,
-                new InvestigationPlanHistoryEntry(
-                    0,
-                    createdAt.AddSeconds(2),
-                    new InvestigationPlan(
-                        "Question",
-                        preparedStepIds
-                            .Select(stepId => new InvestigationStep(
-                                stepId,
-                                WindowsSystemInfoObservationTool.ToolId))
-                            .ToArray())));
+            await PrepareInvestigationAsync(fixture.Store, fixture.InvestigationId, stepIds);
             return fixture;
         }
         catch
@@ -696,6 +1255,15 @@ public sealed class PersistenceTests
             using var command = connection.CreateCommand();
             command.CommandText = $"SELECT COUNT(*) FROM {tableName};";
             return Convert.ToInt64(command.ExecuteScalar());
+        }
+
+        public int GetSchemaVersion()
+        {
+            using var connection = new SqliteConnection($"Data Source={Database.DatabasePath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT MAX(Version) FROM SchemaVersions;";
+            return Convert.ToInt32(command.ExecuteScalar());
         }
 
         public void Dispose()

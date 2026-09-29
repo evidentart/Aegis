@@ -64,20 +64,24 @@ public sealed record LanguageModelRequest(
 public sealed class LanguageModelException : Exception
 {
     public LanguageModelException(string message, Exception? innerException = null)
-        : this(message, LanguageModelFailureCategory.Unknown, innerException)
+        : this(message, LanguageModelFailureCategory.Unknown, innerException, providerStatusCode: null)
     {
     }
 
     public LanguageModelException(
         string message,
         LanguageModelFailureCategory category,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        int? providerStatusCode = null)
         : base(message, innerException)
     {
         Category = category;
+        ProviderStatusCode = providerStatusCode is 0 ? null : providerStatusCode;
     }
 
     public LanguageModelFailureCategory Category { get; }
+
+    public int? ProviderStatusCode { get; }
 }
 
 public static class InvestigationInputValidator

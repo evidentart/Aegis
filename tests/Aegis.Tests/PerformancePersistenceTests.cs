@@ -604,6 +604,82 @@ public sealed class PerformancePersistenceTests
         }
     }
 
+    [Fact]
+    public async Task ClearSavedHistoryAndBaselinesDeletesTypedObservationAndReportDescendants()
+    {
+        using var fixture = await CreatePreparedFixtureAsync(
+            ("system-info", WindowsSystemInfoObservationTool.ToolId),
+            ("system", WindowsPerformanceSystemObservationTool.ToolId),
+            ("processes", WindowsPerformanceTopProcessesObservationTool.ToolId),
+            ("events", WindowsRecentErrorEventsObservationTool.ToolId));
+        var started = DateTimeOffset.UtcNow;
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "system-info",
+                WindowsSystemInfoObservationTool.ToolId,
+                new WindowsSystemInfo("Windows", "10.0", 26100, "X64")));
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "system",
+                WindowsPerformanceSystemObservationTool.ToolId,
+                new WindowsPerformanceSystem(
+                    37.5,
+                    32_000_000,
+                    12_000_000,
+                    62,
+                    started,
+                    TimeSpan.FromMilliseconds(500))));
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "processes",
+                WindowsPerformanceTopProcessesObservationTool.ToolId,
+                new WindowsPerformanceTopProcesses(
+                    started,
+                    TimeSpan.FromMilliseconds(500),
+                    [new WindowsPerformanceProcess(42, "worker.exe", 25, 8_000_000)],
+                    [new WindowsPerformanceProcess(42, "worker.exe", 25, 8_000_000)])));
+        await fixture.Store.AppendStepExecutionAsync(
+            fixture.InvestigationId,
+            CreateExecution(
+                "events",
+                WindowsRecentErrorEventsObservationTool.ToolId,
+                CreateRecentErrorEvents()));
+        var report = new InvestigationReport(
+            "Structured report.",
+            [new EvidenceStatement("System information was collected.", ["system-info"])],
+            [new EvidenceStatement("Performance and event metadata were collected.", ["system", "processes", "events"])],
+            [],
+            [],
+            []);
+        Assert.True(await fixture.Store.CommitTerminalOutcomeAsync(
+            fixture.InvestigationId,
+            InvestigationLifecycleStatus.Completed,
+            new InvestigationOutcome(FinalAnswer: report.Summary, Report: report),
+            started.AddSeconds(1)));
+
+        var result = await fixture.Store.ClearSavedHistoryAndBaselinesAsync();
+
+        Assert.Equal(0, result.BaselinesDeletedCount);
+        Assert.Equal(1, result.InvestigationsDeletedCount);
+        Assert.Equal(0, result.NonTerminalPreservedCount);
+        Assert.Equal(0, fixture.CountRows("Investigations"));
+        Assert.Equal(0, fixture.CountRows("Plans"));
+        Assert.Equal(0, fixture.CountRows("PlanSteps"));
+        Assert.Equal(0, fixture.CountRows("StepExecutions"));
+        Assert.Equal(0, fixture.CountRows("Observations"));
+        Assert.Equal(0, fixture.CountRows("InvestigationReportStatements"));
+        Assert.Equal(0, fixture.CountRows("InvestigationReportEvidenceReferences"));
+        Assert.Equal(0, fixture.CountRows("WindowsPerformanceSystemObservations"));
+        Assert.Equal(0, fixture.CountRows("WindowsPerformanceTopProcessSnapshots"));
+        Assert.Equal(0, fixture.CountRows("WindowsPerformanceTopProcessEntries"));
+        Assert.Equal(0, fixture.CountRows("WindowsRecentErrorEventSnapshots"));
+        Assert.Equal(0, fixture.CountRows("WindowsRecentErrorEventEntries"));
+        AssertNoForeignKeyViolations(fixture);
+    }
+
     private static async Task<PerformanceFixture> CreatePreparedFixtureAsync(
         params (string StepId, string ToolId)[] steps)
     {
@@ -653,6 +729,19 @@ public sealed class PerformancePersistenceTests
             END;
             """;
         command.ExecuteNonQuery();
+    }
+
+    private static void AssertNoForeignKeyViolations(PerformanceFixture fixture)
+    {
+        using var connection = new SqliteConnection($"Data Source={fixture.Database.DatabasePath}");
+        connection.Open();
+        using var pragma = connection.CreateCommand();
+        pragma.CommandText = "PRAGMA foreign_keys = ON;";
+        pragma.ExecuteNonQuery();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA foreign_key_check;";
+        using var reader = command.ExecuteReader();
+        Assert.False(reader.Read());
     }
 
     private static async Task<LegacyFixture> CreateLegacyFixtureAsync(int version)

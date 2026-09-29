@@ -36,6 +36,38 @@ public sealed record BaselineSummary(
         $"{CreatedAtUtc.LocalDateTime:g}  {Platform} {OsVersion}  {Architecture}";
 }
 
+public enum BaselineDeletionStatus
+{
+    Deleted,
+    NotFound
+}
+
+public sealed record BaselineDeletionResult(
+    Guid BaselineId,
+    BaselineDeletionStatus Status);
+
+public enum InvestigationDeletionStatus
+{
+    Deleted,
+    NotFound,
+    NotTerminal,
+    BaselineProtected
+}
+
+public sealed record InvestigationDeletionResult(
+    Guid InvestigationId,
+    InvestigationDeletionStatus Status);
+
+public sealed record ClearHistoryResult(
+    int DeletedCount,
+    int BaselineProtectedCount,
+    int NonTerminalPreservedCount);
+
+public sealed record ClearSavedHistoryAndBaselinesResult(
+    int BaselinesDeletedCount,
+    int InvestigationsDeletedCount,
+    int NonTerminalPreservedCount);
+
 public interface IInvestigationHistoryStore
 {
     Task CreateAsync(
@@ -76,6 +108,16 @@ public interface IInvestigationHistoryStore
     Task<InvestigationDetails?> GetAsync(
         Guid investigationId,
         CancellationToken cancellationToken = default);
+
+    Task<InvestigationDeletionResult> DeleteInvestigationAsync(
+        Guid investigationId,
+        CancellationToken cancellationToken = default);
+
+    Task<ClearHistoryResult> ClearHistoryAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<ClearSavedHistoryAndBaselinesResult> ClearSavedHistoryAndBaselinesAsync(
+        CancellationToken cancellationToken = default);
 }
 
 public interface IBaselineStore
@@ -85,5 +127,9 @@ public interface IBaselineStore
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<BaselineSummary>> ListBaselinesAsync(
+        CancellationToken cancellationToken = default);
+
+    Task<BaselineDeletionResult> DeleteBaselineAsync(
+        Guid baselineId,
         CancellationToken cancellationToken = default);
 }

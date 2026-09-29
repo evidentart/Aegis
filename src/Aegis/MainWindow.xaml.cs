@@ -118,13 +118,20 @@ public sealed partial class MainWindow : Window
         }
         catch (LanguageModelException exception)
         {
-            _logger.LogWarning("Investigation request failed.");
+            _logger.LogWarning(
+                "Investigation request failed. ExceptionType={ExceptionType} Category={Category} InnerExceptionType={InnerExceptionType} ProviderStatusCode={ProviderStatusCode}.",
+                exception.GetType().Name,
+                exception.Category,
+                exception.InnerException?.GetType().Name ?? "none",
+                exception.ProviderStatusCode?.ToString() ?? "none");
             StatusTextBlock.Text = exception.Category switch
             {
                 LanguageModelFailureCategory.ProviderNotConfigured =>
                     "OpenAI is not configured. Set AEGIS_OPENAI_API_KEY for local development.",
                 LanguageModelFailureCategory.AuthenticationRejected =>
                     "OpenAI authentication was rejected.",
+                LanguageModelFailureCategory.ProviderRejected =>
+                    "OpenAI rejected the investigation request. See History for the recorded failure stage.",
                 LanguageModelFailureCategory.ProviderUnavailable =>
                     "OpenAI could not be reached right now.",
                 LanguageModelFailureCategory.StructuredOutputFailure =>
@@ -138,9 +145,12 @@ public sealed partial class MainWindow : Window
         {
             StatusTextBlock.Text = "Investigation cancelled.";
         }
-        catch (AgentRuntimeException)
+        catch (AgentRuntimeException exception)
         {
-            _logger.LogWarning("Investigation request failed.");
+            _logger.LogWarning(
+                "Investigation request failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             StatusTextBlock.Text = "Investigation is unavailable right now.";
         }
         catch (InvestigationPersistenceException)
@@ -150,7 +160,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Unexpected investigation failure.");
+            _logger.LogError(
+                "Unexpected investigation failure. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             StatusTextBlock.Text = "Investigation is unavailable right now.";
         }
         finally
@@ -164,6 +177,102 @@ public sealed partial class MainWindow : Window
 
     private async void RefreshHistoryButton_Click(object sender, RoutedEventArgs e) =>
         await RefreshHistoryAsync();
+
+    private async void DeleteInvestigationButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedInvestigation is null)
+        {
+            return;
+        }
+
+        var investigation = _selectedInvestigation.Investigation;
+        if (!await ConfirmDestructiveActionAsync(
+                "Delete investigation",
+                "This deletes the selected investigation and its saved Aegis history. Baselines are never deleted.",
+                "Delete"))
+        {
+            return;
+        }
+
+        DeleteInvestigationButton.IsEnabled = false;
+        try
+        {
+            var result = await _historyService.DeleteInvestigationAsync(investigation.InvestigationId);
+            var status = result.Status switch
+            {
+                InvestigationDeletionStatus.Deleted => "Investigation deleted.",
+                InvestigationDeletionStatus.NotFound => "That investigation was already deleted.",
+                InvestigationDeletionStatus.NotTerminal =>
+                    "This investigation cannot be deleted until it reaches a terminal state.",
+                InvestigationDeletionStatus.BaselineProtected =>
+                    "This investigation is required as provenance for a baseline and was preserved.",
+                _ => "The investigation deletion result was not recognized."
+            };
+
+            var refreshed = await RefreshHistoryAsync();
+            if (result.Status == InvestigationDeletionStatus.Deleted)
+            {
+                HistoryListView.SelectedItem = null;
+                ClearHistoryDetails();
+            }
+
+            HistoryActionStatusTextBlock.Text = refreshed
+                ? status
+                : $"{status} History could not be refreshed.";
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Investigation deletion failed.");
+            var refreshed = await RefreshHistoryAsync();
+            HistoryActionStatusTextBlock.Text = refreshed
+                ? "Investigation deletion failed. History was refreshed from persistence."
+                : "Investigation deletion failed, and current history could not be refreshed.";
+        }
+        finally
+        {
+            DeleteInvestigationButton.IsEnabled = _selectedInvestigation is not null;
+        }
+    }
+
+    private async void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await ConfirmDestructiveActionAsync(
+                "Clear history",
+                "This deletes all terminal investigation history that is not required as baseline provenance. Baselines, active investigations, and their provenance are preserved.",
+                "Clear history"))
+        {
+            return;
+        }
+
+        ClearHistoryButton.IsEnabled = false;
+        DeleteInvestigationButton.IsEnabled = false;
+        try
+        {
+            var result = await _historyService.ClearHistoryAsync();
+            var preservedCount = result.BaselineProtectedCount + result.NonTerminalPreservedCount;
+            var refreshed = await RefreshHistoryAsync();
+            HistoryListView.SelectedItem = null;
+            ClearHistoryDetails();
+            HistoryActionStatusTextBlock.Text = refreshed
+                ? $"Deleted {result.DeletedCount} investigation{(result.DeletedCount == 1 ? "" : "s")}. " +
+                  $"Preserved {preservedCount} ({result.BaselineProtectedCount} baseline-protected, " +
+                  $"{result.NonTerminalPreservedCount} non-terminal)."
+                : "Clear history completed, but History could not be refreshed.";
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Clear history failed.");
+            var refreshed = await RefreshHistoryAsync();
+            HistoryActionStatusTextBlock.Text = refreshed
+                ? "Clear history failed. History was refreshed from persistence."
+                : "Clear history failed, and current history could not be refreshed.";
+        }
+        finally
+        {
+            ClearHistoryButton.IsEnabled = true;
+            DeleteInvestigationButton.IsEnabled = _selectedInvestigation is not null;
+        }
+    }
 
     private async void HistoryListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -190,6 +299,7 @@ public sealed partial class MainWindow : Window
             HistoryDetailMetadataTextBlock.Visibility = Visibility.Visible;
             HistoryDetailMetadataTextBlock.Text =
                 $"{investigation.LifecycleStatus} | {investigation.CreatedAtUtc.LocalDateTime:g}";
+            DeleteInvestigationButton.IsEnabled = true;
 
             HistoryResultSectionsPanel.Children.Clear();
             if (investigation.Outcome?.Report is { } report)
@@ -237,6 +347,7 @@ public sealed partial class MainWindow : Window
         HistoryDetailQuestionTextBlock.Text = string.Empty;
         HistoryDetailMetadataTextBlock.Visibility = Visibility.Collapsed;
         HistoryDetailMetadataTextBlock.Text = string.Empty;
+        DeleteInvestigationButton.IsEnabled = false;
         HistoryResultSectionsPanel.Children.Clear();
         HistoryPlansHeadingTextBlock.Visibility = Visibility.Collapsed;
         HistoryPlansTextBlock.Text = string.Empty;
@@ -317,16 +428,68 @@ public sealed partial class MainWindow : Window
         {
             BaselineEmptyDetailTextBlock.Visibility = Visibility.Visible;
             BaselineDetailTextBlock.Text = string.Empty;
+            DeleteBaselineButton.IsEnabled = false;
             return;
         }
 
         BaselineEmptyDetailTextBlock.Visibility = Visibility.Collapsed;
+        DeleteBaselineButton.IsEnabled = true;
         BaselineDetailTextBlock.Text =
             $"{baseline.Platform} {baseline.OsVersion} (build {baseline.Build?.ToString() ?? "unknown"}), " +
             $"{baseline.Architecture}" + Environment.NewLine +
             $"Source investigation: {baseline.SourceInvestigationId}" + Environment.NewLine +
             $"Created: {baseline.CreatedAtUtc.LocalDateTime:g}" + Environment.NewLine +
             $"Tool: {baseline.ToolId}";
+    }
+
+    private async void DeleteBaselineButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (BaselineListView.SelectedItem is not BaselineSummary baseline)
+        {
+            return;
+        }
+
+        if (!await ConfirmDestructiveActionAsync(
+                "Delete baseline",
+                "This deletes the selected baseline only. Its source investigation will not be deleted automatically.",
+                "Delete baseline"))
+        {
+            return;
+        }
+
+        DeleteBaselineButton.IsEnabled = false;
+        try
+        {
+            var result = await _baselineService.DeleteBaselineAsync(baseline.BaselineId);
+            var refreshed = await RefreshHistoryAsync();
+            if (result.Status is BaselineDeletionStatus.Deleted or BaselineDeletionStatus.NotFound)
+            {
+                BaselineListView.SelectedItem = null;
+            }
+
+            BaselineActionStatusTextBlock.Text = refreshed
+                ? result.Status switch
+                {
+                    BaselineDeletionStatus.Deleted =>
+                        "Baseline deleted. Its source investigation was preserved.",
+                    BaselineDeletionStatus.NotFound =>
+                        "That baseline was already deleted.",
+                    _ => "The baseline deletion result was not recognized."
+                }
+                : "Baseline deletion completed, but current saved data could not be fully refreshed.";
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Baseline deletion failed.");
+            var refreshed = await RefreshHistoryAsync();
+            BaselineActionStatusTextBlock.Text = refreshed
+                ? "Baseline deletion failed. Saved data was refreshed from persistence."
+                : "Baseline deletion failed, and current saved data could not be fully refreshed.";
+        }
+        finally
+        {
+            DeleteBaselineButton.IsEnabled = BaselineListView.SelectedItem is BaselineSummary;
+        }
     }
 
     private async void CreateBaselineButton_Click(object sender, RoutedEventArgs e)
@@ -354,21 +517,82 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task RefreshHistoryAsync()
+    private async void ClearSavedHistoryAndBaselinesButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await ConfirmDestructiveActionAsync(
+                "Clear saved history and baselines",
+                "All saved baselines and all terminal investigation history will be deleted. Created and Running investigations will remain. This removes Aegis-saved records, not Windows or system data.",
+                "Clear saved data"))
+        {
+            return;
+        }
+
+        ClearSavedHistoryAndBaselinesButton.IsEnabled = false;
+        ClearHistoryButton.IsEnabled = false;
+        DeleteBaselineButton.IsEnabled = false;
+        DeleteInvestigationButton.IsEnabled = false;
+        try
+        {
+            var result = await _historyService.ClearSavedHistoryAndBaselinesAsync();
+            var refreshed = await RefreshHistoryAsync();
+            HistoryListView.SelectedItem = null;
+            ClearHistoryDetails();
+            BaselineListView.SelectedItem = null;
+            SavedDataStatusTextBlock.Text = refreshed
+                ? $"Deleted {result.BaselinesDeletedCount} baseline{(result.BaselinesDeletedCount == 1 ? "" : "s")} and " +
+                  $"{result.InvestigationsDeletedCount} terminal investigation{(result.InvestigationsDeletedCount == 1 ? "" : "s")}. " +
+                  $"Preserved {result.NonTerminalPreservedCount} non-terminal investigation{(result.NonTerminalPreservedCount == 1 ? "" : "s")}."
+                : "Saved-data cleanup completed, but current saved data could not be fully refreshed.";
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Saved history and baseline cleanup failed.");
+            var refreshed = await RefreshHistoryAsync();
+            SavedDataStatusTextBlock.Text = refreshed
+                ? "Saved-data cleanup failed. Current saved data was refreshed from persistence."
+                : "Saved-data cleanup failed, and current saved data could not be fully refreshed.";
+        }
+        finally
+        {
+            ClearSavedHistoryAndBaselinesButton.IsEnabled = true;
+            ClearHistoryButton.IsEnabled = true;
+            DeleteBaselineButton.IsEnabled = BaselineListView.SelectedItem is BaselineSummary;
+            DeleteInvestigationButton.IsEnabled = _selectedInvestigation is not null;
+        }
+    }
+
+    private async Task<bool> RefreshHistoryAsync()
     {
         try
         {
             HistoryListView.ItemsSource = await _historyService.ListAsync();
-            await RefreshBaselinesAsync();
+            return await RefreshBaselinesAsync();
         }
         catch (Exception exception)
         {
             _logger.LogError(exception, "History could not be loaded.");
             HistoryEmptyDetailTextBlock.Text = "History is unavailable right now.";
+            return false;
         }
     }
 
-    private async Task RefreshBaselinesAsync()
+    private async Task<bool> ConfirmDestructiveActionAsync(
+        string title,
+        string message,
+        string primaryButtonText)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = message,
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Cancel",
+            XamlRoot = RootNavigationView.XamlRoot
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    private async Task<bool> RefreshBaselinesAsync()
     {
         try
         {
@@ -377,12 +601,14 @@ public sealed partial class MainWindow : Window
             BaselineEmptyStatePanel.Visibility = baselines.Count == 0
                 ? Visibility.Visible
                 : Visibility.Collapsed;
+            return true;
         }
         catch (Exception exception)
         {
             _logger.LogError(exception, "Baselines could not be loaded.");
             BaselineEmptyStatePanel.Visibility = Visibility.Visible;
             BaselineEmptyDetailTextBlock.Text = "Baselines are unavailable right now.";
+            return false;
         }
     }
 

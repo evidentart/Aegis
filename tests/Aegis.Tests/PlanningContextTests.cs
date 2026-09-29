@@ -40,6 +40,7 @@ public sealed class PlanningContextTests
         Assert.DoesNotContain("Authoritative runtime objective", systemInstruction);
         Assert.Equal(LanguageModelMessageRole.User, messages[1].Role);
         Assert.Equal("Authoritative runtime objective", messages[1].Content);
+        Assert.Equal("Create the initial investigation plan.", messages[^1].Content);
     }
 
     [Fact]
@@ -56,7 +57,7 @@ public sealed class PlanningContextTests
             ExecutionPhase = InvestigationExecutionPhase.Replanning
         };
 
-        await planner.CreatePlanAsync(state);
+        await planner.CreateReplanDecisionAsync(state);
 
         Assert.Equal(LanguageModelCallPhase.Replanning, model.LastRequest!.Phase);
         var messages = model.LastRequest.Messages;
@@ -65,12 +66,24 @@ public sealed class PlanningContextTests
                 message => message.Role == LanguageModelMessageRole.System)
             .Content;
         Assert.Contains("The first User message is the runtime-owned authoritative investigation objective.", systemInstruction);
-        Assert.Contains("Copy the first User message exactly", systemInstruction);
+        Assert.Contains("copy the first User message exactly", systemInstruction);
         Assert.Contains("MaximumObservationExecutions - ObservationsUsed = 1", systemInstruction);
-        Assert.Contains("Return a plan with at least one step. Its step count must not exceed 1.", systemInstruction);
+        Assert.Contains("For revised_plan, return at least one step and do not exceed 1 remaining observations.", systemInstruction);
+        Assert.Contains("Choose finalize_now when no further observation is needed.", systemInstruction);
+        Assert.Contains("The finalize_now decision contains no answer, report, summary, rationale, evidence references, or other payload", systemInstruction);
         Assert.DoesNotContain("Replan authoritative runtime objective", systemInstruction);
         Assert.Equal(LanguageModelMessageRole.User, messages[1].Role);
         Assert.Equal("Replan authoritative runtime objective", messages[1].Content);
+        var replanTail = messages[^1];
+        Assert.Equal(LanguageModelMessageRole.User, replanTail.Role);
+        Assert.Equal(
+            "Decide whether the evidence already collected is sufficient to answer the authoritative objective. If it is sufficient, choose finalize_now. Otherwise, create one revised investigation plan.",
+            replanTail.Content);
+        Assert.Contains("finalize_now", replanTail.Content);
+        Assert.Contains("revised investigation plan", replanTail.Content);
+        Assert.DoesNotContain(
+            "Create one revised investigation plan using the evidence already collected.",
+            replanTail.Content);
     }
 
     private static InvestigationState CreateState() =>
@@ -115,8 +128,11 @@ public sealed class PlanningContextTests
             CancellationToken cancellationToken = default)
         {
             LastRequest = request;
-            return Task.FromResult<AgentDecision>(
-                new InvestigationPlanDecision(new InvestigationPlan("Why is this PC slow?", [])));
+            return Task.FromResult<AgentDecision>(request.Phase == LanguageModelCallPhase.Replanning
+                ? new InvestigationReplanDecision.RevisedPlan(
+                    new InvestigationPlan("Why is this PC slow?", [new InvestigationStep("step-1", "tool.one")]))
+                : new InvestigationPlanDecision(
+                    new InvestigationPlan("Why is this PC slow?", [])));
         }
     }
 }

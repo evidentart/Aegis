@@ -760,6 +760,166 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         return Task.FromResult<InvestigationDetails?>(new InvestigationDetails(investigation));
     }
 
+    public Task<InvestigationDeletionResult> DeleteInvestigationAsync(
+        Guid investigationId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        var lifecycleStatus = ReadInvestigationLifecycleStatus(
+            connection,
+            transaction,
+            investigationId);
+        if (lifecycleStatus is null)
+        {
+            transaction.Commit();
+            return Task.FromResult(new InvestigationDeletionResult(
+                investigationId,
+                InvestigationDeletionStatus.NotFound));
+        }
+
+        if (lifecycleStatus is not (InvestigationLifecycleStatus.Completed or
+            InvestigationLifecycleStatus.Failed or InvestigationLifecycleStatus.Cancelled))
+        {
+            transaction.Commit();
+            return Task.FromResult(new InvestigationDeletionResult(
+                investigationId,
+                InvestigationDeletionStatus.NotTerminal));
+        }
+
+        if (HasBaselineReference(connection, transaction, investigationId))
+        {
+            transaction.Commit();
+            return Task.FromResult(new InvestigationDeletionResult(
+                investigationId,
+                InvestigationDeletionStatus.BaselineProtected));
+        }
+
+        DeleteInvestigationOwnedRows(connection, transaction, investigationId);
+        transaction.Commit();
+        return Task.FromResult(new InvestigationDeletionResult(
+            investigationId,
+            InvestigationDeletionStatus.Deleted));
+    }
+
+    public Task<ClearHistoryResult> ClearHistoryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        var deletableInvestigationIds = new List<Guid>();
+        var baselineProtectedCount = 0;
+        var nonTerminalPreservedCount = 0;
+
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                SELECT InvestigationId, LifecycleStatus,
+                       EXISTS (
+                           SELECT 1
+                           FROM Baselines baseline
+                           WHERE baseline.SourceInvestigationId = investigation.InvestigationId) AS HasBaseline
+                FROM Investigations investigation;
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = ParseGuid(reader.GetString(0));
+                var lifecycleStatus = (InvestigationLifecycleStatus)reader.GetInt32(1);
+                var hasBaseline = reader.GetInt32(2) != 0;
+                if (hasBaseline)
+                {
+                    baselineProtectedCount++;
+                }
+                else if (lifecycleStatus is InvestigationLifecycleStatus.Completed or
+                    InvestigationLifecycleStatus.Failed or InvestigationLifecycleStatus.Cancelled)
+                {
+                    deletableInvestigationIds.Add(id);
+                }
+                else
+                {
+                    nonTerminalPreservedCount++;
+                }
+            }
+        }
+
+        foreach (var investigationId in deletableInvestigationIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DeleteInvestigationOwnedRows(connection, transaction, investigationId);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        transaction.Commit();
+        return Task.FromResult(new ClearHistoryResult(
+            deletableInvestigationIds.Count,
+            baselineProtectedCount,
+            nonTerminalPreservedCount));
+    }
+
+    public Task<ClearSavedHistoryAndBaselinesResult> ClearSavedHistoryAndBaselinesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        int baselinesDeletedCount;
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM Baselines;";
+            baselinesDeletedCount = command.ExecuteNonQuery();
+        }
+
+        var terminalInvestigationIds = new List<Guid>();
+        var nonTerminalPreservedCount = 0;
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                SELECT InvestigationId, LifecycleStatus
+                FROM Investigations;
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var investigationId = ParseGuid(reader.GetString(0));
+                var lifecycleStatus = (InvestigationLifecycleStatus)reader.GetInt32(1);
+                if (lifecycleStatus is InvestigationLifecycleStatus.Completed or
+                    InvestigationLifecycleStatus.Failed or InvestigationLifecycleStatus.Cancelled)
+                {
+                    terminalInvestigationIds.Add(investigationId);
+                }
+                else
+                {
+                    nonTerminalPreservedCount++;
+                }
+            }
+        }
+
+        foreach (var investigationId in terminalInvestigationIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DeleteInvestigationOwnedRows(connection, transaction, investigationId);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        transaction.Commit();
+        return Task.FromResult(new ClearSavedHistoryAndBaselinesResult(
+            baselinesDeletedCount,
+            terminalInvestigationIds.Count,
+            nonTerminalPreservedCount));
+    }
+
     public Task CreateAsync(
         Baseline baseline,
         CancellationToken cancellationToken = default)
@@ -923,6 +1083,209 @@ public sealed class SqliteInvestigationStore : IInvestigationHistoryStore, IBase
         }
 
         return Task.FromResult<IReadOnlyList<BaselineSummary>>(baselines);
+    }
+
+    public Task<BaselineDeletionResult> DeleteBaselineAsync(
+        Guid baselineId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE FROM Baselines
+            WHERE BaselineId = $id;
+            """;
+        SqliteDatabase.AddParameter(command, "$id", baselineId.ToString("D"));
+        var deleted = command.ExecuteNonQuery() == 1;
+        transaction.Commit();
+        return Task.FromResult(new BaselineDeletionResult(
+            baselineId,
+            deleted ? BaselineDeletionStatus.Deleted : BaselineDeletionStatus.NotFound));
+    }
+
+    private static InvestigationLifecycleStatus? ReadInvestigationLifecycleStatus(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid investigationId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT LifecycleStatus
+            FROM Investigations
+            WHERE InvestigationId = $id;
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        var value = command.ExecuteScalar();
+        return value is null
+            ? null
+            : (InvestigationLifecycleStatus)Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    private static bool HasBaselineReference(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid investigationId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM Baselines
+                WHERE SourceInvestigationId = $id);
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+    }
+
+    private static void DeleteInvestigationOwnedRows(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid investigationId)
+    {
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM InvestigationReportEvidenceReferences
+            WHERE InvestigationId = $id;
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM InvestigationReportStatements
+            WHERE InvestigationId = $id;
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM StepExecutions
+            WHERE InvestigationId = $id;
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM WindowsPerformanceTopProcessEntries
+            WHERE ObservationId IN (
+                SELECT ObservationId
+                FROM Observations
+                WHERE InvestigationId = $id);
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM WindowsPerformanceTopProcessSnapshots
+            WHERE ObservationId IN (
+                SELECT ObservationId
+                FROM Observations
+                WHERE InvestigationId = $id);
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM WindowsPerformanceSystemObservations
+            WHERE ObservationId IN (
+                SELECT ObservationId
+                FROM Observations
+                WHERE InvestigationId = $id);
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM WindowsRecentErrorEventEntries
+            WHERE ObservationId IN (
+                SELECT ObservationId
+                FROM Observations
+                WHERE InvestigationId = $id);
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM WindowsRecentErrorEventSnapshots
+            WHERE ObservationId IN (
+                SELECT ObservationId
+                FROM Observations
+                WHERE InvestigationId = $id);
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM Observations
+            WHERE InvestigationId = $id;
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM PlanSteps
+            WHERE InvestigationId = $id;
+            """,
+            investigationId);
+        ExecuteInvestigationDelete(
+            connection,
+            transaction,
+            """
+            DELETE FROM Plans
+            WHERE InvestigationId = $id;
+            """,
+            investigationId);
+
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE FROM Investigations
+            WHERE InvestigationId = $id
+              AND LifecycleStatus IN ($completed, $failed, $cancelled)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM Baselines
+                  WHERE SourceInvestigationId = $id);
+            """;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        SqliteDatabase.AddParameter(command, "$completed", (int)InvestigationLifecycleStatus.Completed);
+        SqliteDatabase.AddParameter(command, "$failed", (int)InvestigationLifecycleStatus.Failed);
+        SqliteDatabase.AddParameter(command, "$cancelled", (int)InvestigationLifecycleStatus.Cancelled);
+        if (command.ExecuteNonQuery() != 1)
+        {
+            throw new InvestigationPersistenceException(
+                "The investigation could not be deleted because its persisted state changed.");
+        }
+    }
+
+    private static void ExecuteInvestigationDelete(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string commandText,
+        Guid investigationId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = commandText;
+        SqliteDatabase.AddParameter(command, "$id", investigationId.ToString("D"));
+        command.ExecuteNonQuery();
     }
 
     private long InsertObservation(

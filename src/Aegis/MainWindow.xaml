@@ -186,12 +186,18 @@
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
               <StackPanel Spacing="4">
                 <TextBlock Text="History" FontSize="28" FontWeight="SemiBold" />
                 <TextBlock Text="Review persisted investigations and their observations." Style="{StaticResource PageDescriptionTextStyle}" />
               </StackPanel>
-              <Button Grid.Column="1" Content="Refresh" Click="RefreshHistoryButton_Click" VerticalAlignment="Center" />
+              <Button x:Name="ClearHistoryButton"
+                      Grid.Column="1"
+                      Content="Clear history"
+                      Click="ClearHistoryButton_Click"
+                      VerticalAlignment="Center" />
+              <Button Grid.Column="2" Content="Refresh" Click="RefreshHistoryButton_Click" VerticalAlignment="Center" />
             </Grid>
 
             <Grid Grid.Row="1" Margin="0,20,0,0" ColumnSpacing="20">
@@ -249,9 +255,17 @@
                                TextWrapping="Wrap"
                                Visibility="Collapsed" />
                     <TextBlock x:Name="HistoryDetailMetadataTextBlock"
+                                Style="{StaticResource MetadataTextStyle}"
+                                TextWrapping="Wrap"
+                                Visibility="Collapsed" />
+                    <Button x:Name="DeleteInvestigationButton"
+                            Content="Delete investigation"
+                            Click="DeleteInvestigationButton_Click"
+                            IsEnabled="False"
+                            HorizontalAlignment="Left" />
+                    <TextBlock x:Name="HistoryActionStatusTextBlock"
                                Style="{StaticResource MetadataTextStyle}"
-                               TextWrapping="Wrap"
-                               Visibility="Collapsed" />
+                               TextWrapping="Wrap" />
                     <StackPanel x:Name="HistoryResultSectionsPanel" Spacing="16" />
                     <TextBlock Text="Plan history" FontWeight="SemiBold" Visibility="Collapsed" x:Name="HistoryPlansHeadingTextBlock" />
                     <TextBlock x:Name="HistoryPlansTextBlock"
@@ -355,6 +369,14 @@
                              Style="{StaticResource PageDescriptionTextStyle}"
                              TextWrapping="Wrap" />
                   <TextBlock x:Name="BaselineDetailTextBlock" TextWrapping="Wrap" />
+                  <Button x:Name="DeleteBaselineButton"
+                          Content="Delete baseline"
+                          Click="DeleteBaselineButton_Click"
+                          IsEnabled="False"
+                          HorizontalAlignment="Left" />
+                  <TextBlock x:Name="BaselineActionStatusTextBlock"
+                             Style="{StaticResource MetadataTextStyle}"
+                             TextWrapping="Wrap" />
                 </StackPanel>
               </Border>
             </Grid>
@@ -394,6 +416,21 @@
                     </StackPanel>
                     <TextBlock Text="Credentials are not displayed, stored, or edited here."
                                Style="{StaticResource MetadataTextStyle}" />
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="20">
+                  <StackPanel Spacing="10">
+                    <TextBlock Text="Data management" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="Remove saved Aegis history and baselines while preserving investigations that are still being created or run."
+                               Style="{StaticResource PageDescriptionTextStyle}"
+                               TextWrapping="Wrap" />
+                    <Button x:Name="ClearSavedHistoryAndBaselinesButton"
+                            Content="Clear saved history and baselines"
+                            Click="ClearSavedHistoryAndBaselinesButton_Click"
+                            HorizontalAlignment="Left" />
+                    <TextBlock x:Name="SavedDataStatusTextBlock"
+                               Style="{StaticResource MetadataTextStyle}"
+                               TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
               </StackPanel>

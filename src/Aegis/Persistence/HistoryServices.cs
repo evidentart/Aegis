@@ -19,6 +19,19 @@ public sealed class InvestigationHistoryService
         Guid investigationId,
         CancellationToken cancellationToken = default) =>
         _store.GetAsync(investigationId, cancellationToken);
+
+    public Task<InvestigationDeletionResult> DeleteInvestigationAsync(
+        Guid investigationId,
+        CancellationToken cancellationToken = default) =>
+        _store.DeleteInvestigationAsync(investigationId, cancellationToken);
+
+    public Task<ClearHistoryResult> ClearHistoryAsync(
+        CancellationToken cancellationToken = default) =>
+        _store.ClearHistoryAsync(cancellationToken);
+
+    public Task<ClearSavedHistoryAndBaselinesResult> ClearSavedHistoryAndBaselinesAsync(
+        CancellationToken cancellationToken = default) =>
+        _store.ClearSavedHistoryAndBaselinesAsync(cancellationToken);
 }
 
 public sealed class BaselineService
@@ -40,6 +53,11 @@ public sealed class BaselineService
     public Task<IReadOnlyList<BaselineSummary>> ListAsync(
         CancellationToken cancellationToken = default) =>
         _baselineStore.ListBaselinesAsync(cancellationToken);
+
+    public Task<BaselineDeletionResult> DeleteBaselineAsync(
+        Guid baselineId,
+        CancellationToken cancellationToken = default) =>
+        _baselineStore.DeleteBaselineAsync(baselineId, cancellationToken);
 
     public async Task CreateFromStepAsync(
         Guid investigationId,

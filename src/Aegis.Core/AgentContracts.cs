@@ -12,6 +12,17 @@ public sealed record FinalAnswerDecision(InvestigationReport Report) : AgentDeci
 
 public sealed record InvestigationPlanDecision(InvestigationPlan Plan) : AgentDecision;
 
+public abstract record InvestigationReplanDecision : AgentDecision
+{
+    private InvestigationReplanDecision()
+    {
+    }
+
+    public sealed record RevisedPlan(InvestigationPlan Plan) : InvestigationReplanDecision;
+
+    public sealed record FinalizeNow : InvestigationReplanDecision;
+}
+
 public sealed record AgentRunResult(Guid InvestigationId, InvestigationReport Report)
 {
     public string Answer => Report.Summary;

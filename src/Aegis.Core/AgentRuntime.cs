@@ -87,14 +87,23 @@ public sealed class AgentRuntime
                     ReplanCount = 1,
                     ExecutionPhase = InvestigationExecutionPhase.Replanning
                 };
-                var revisedPlan = await CreateAndValidatePlanAsync(state, cancellationToken);
-                state = await ApplyPlanAsync(state, revisedPlan, cancellationToken);
-                state = await ExecutePlanAsync(state, revisedPlan, cancellationToken);
+                var replanDecision = await _planner.CreateReplanDecisionAsync(state, cancellationToken);
+                switch (replanDecision)
+                {
+                    case InvestigationReplanDecision.RevisedPlan revisedPlan:
+                        ValidatePlan(revisedPlan.Plan, state);
+                        state = await ApplyPlanAsync(state, revisedPlan.Plan, cancellationToken);
+                        state = await ExecutePlanAsync(state, revisedPlan.Plan, cancellationToken);
+                        break;
+                    case InvestigationReplanDecision.FinalizeNow:
+                        break;
+                    default:
+                        throw new AgentRuntimeException("The planner returned an invalid replan decision.");
+                }
             }
 
-            var report = await FinalizeAsync(
-                state with { ExecutionPhase = InvestigationExecutionPhase.Finalizing },
-                cancellationToken);
+            state = state with { ExecutionPhase = InvestigationExecutionPhase.Finalizing };
+            var report = await FinalizeAsync(state, cancellationToken);
             var completedAtUtc = DateTimeOffset.UtcNow;
             var completedOutcome = new InvestigationOutcome(
                 FinalAnswer: report.Summary,
@@ -143,12 +152,11 @@ public sealed class AgentRuntime
                 terminalCommitAttempted = true;
                 try
                 {
+                    var failureOutcome = CreateFailureOutcome(state, exception);
                     await CommitTerminalOutcomeAsync(
                         state,
                         InvestigationLifecycleStatus.Failed,
-                        new InvestigationOutcome(
-                            FailureCode: "investigation_failed",
-                            FailureMessage: "The investigation could not be completed."),
+                        failureOutcome,
                         DateTimeOffset.UtcNow);
                 }
                 catch (InvestigationPersistenceException persistenceException)
@@ -178,6 +186,90 @@ public sealed class AgentRuntime
         ValidatePlan(decision.Plan, state);
         return decision.Plan;
     }
+
+    private static InvestigationOutcome CreateFailureOutcome(
+        InvestigationState state,
+        Exception exception)
+    {
+        var phaseCode = GetPhaseCode(state.ExecutionPhase);
+        var phaseLabel = GetPhaseLabel(state.ExecutionPhase);
+
+        return exception switch
+        {
+            LanguageModelException languageModelException =>
+                CreateLanguageModelFailureOutcome(
+                    phaseCode,
+                    phaseLabel,
+                    languageModelException),
+            AgentRuntimeException => new InvestigationOutcome(
+                FailureCode: $"investigation_failed_agent_runtime_{phaseCode}",
+                FailureMessage: $"Investigation failed during {phaseLabel} during bounded runtime validation or processing."),
+            _ => new InvestigationOutcome(
+                FailureCode: $"investigation_failed_unexpected_{phaseCode}",
+                FailureMessage: $"Investigation failed during {phaseLabel} because of an unexpected runtime error.")
+        };
+    }
+
+    private static InvestigationOutcome CreateLanguageModelFailureOutcome(
+        string phaseCode,
+        string phaseLabel,
+        LanguageModelException exception)
+    {
+        var categoryCode = GetLanguageModelCategoryCode(exception.Category);
+        var categoryLabel = GetLanguageModelCategoryLabel(exception.Category);
+        var statusSuffix = exception.ProviderStatusCode is { } status
+            ? $" Provider status: {status}."
+            : string.Empty;
+        return new InvestigationOutcome(
+            FailureCode: $"investigation_failed_language_model_{phaseCode}_{categoryCode}",
+            FailureMessage:
+                $"Investigation failed during {phaseLabel} because of language-model category {categoryLabel}." +
+                statusSuffix);
+    }
+
+    private static string GetPhaseCode(InvestigationExecutionPhase phase) => phase switch
+    {
+        InvestigationExecutionPhase.Planning => "planning",
+        InvestigationExecutionPhase.Executing => "executing",
+        InvestigationExecutionPhase.Replanning => "replanning",
+        InvestigationExecutionPhase.Finalizing => "finalizing",
+        _ => "unknown"
+    };
+
+    private static string GetPhaseLabel(InvestigationExecutionPhase phase) => phase switch
+    {
+        InvestigationExecutionPhase.Planning => "initial planning",
+        InvestigationExecutionPhase.Executing => "observation execution",
+        InvestigationExecutionPhase.Replanning => "replanning",
+        InvestigationExecutionPhase.Finalizing => "finalization",
+        _ => "the investigation runtime"
+    };
+
+    private static string GetLanguageModelCategoryCode(LanguageModelFailureCategory category) => category switch
+    {
+        LanguageModelFailureCategory.ProviderNotConfigured => "provider_not_configured",
+        LanguageModelFailureCategory.AuthenticationRejected => "authentication_rejected",
+        LanguageModelFailureCategory.ProviderRejected => "provider_rejected",
+        LanguageModelFailureCategory.ProviderUnavailable => "provider_unavailable",
+        LanguageModelFailureCategory.InvalidModelResponse => "invalid_model_response",
+        LanguageModelFailureCategory.StructuredOutputFailure => "structured_output_failure",
+        LanguageModelFailureCategory.Cancelled => "cancelled",
+        LanguageModelFailureCategory.Unknown => "unknown",
+        _ => "unknown"
+    };
+
+    private static string GetLanguageModelCategoryLabel(LanguageModelFailureCategory category) => category switch
+    {
+        LanguageModelFailureCategory.ProviderNotConfigured => "provider not configured",
+        LanguageModelFailureCategory.AuthenticationRejected => "authentication rejected",
+        LanguageModelFailureCategory.ProviderRejected => "provider rejected",
+        LanguageModelFailureCategory.ProviderUnavailable => "provider unavailable",
+        LanguageModelFailureCategory.InvalidModelResponse => "invalid model response",
+        LanguageModelFailureCategory.StructuredOutputFailure => "structured output failure",
+        LanguageModelFailureCategory.Cancelled => "cancelled",
+        LanguageModelFailureCategory.Unknown => "unknown",
+        _ => "unknown"
+    };
 
     private void ValidatePlan(
         InvestigationPlan plan,

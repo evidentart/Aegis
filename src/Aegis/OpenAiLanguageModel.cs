@@ -135,7 +135,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                     LanguageModelFailureCategory.InvalidModelResponse);
             }
 
-            var decision = OpenAiDecisionParser.Parse(completion.Content);
+            var decision = OpenAiDecisionParser.Parse(completion.Content, request.Phase);
             ReportDiagnostics(
                 request,
                 LanguageModelCallOutcome.Succeeded,
@@ -180,7 +180,8 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
             throw new LanguageModelException(
                 "The language model request failed.",
                 category,
-                exception);
+                exception,
+                exception.Status);
         }
         catch (HttpRequestException exception)
         {
@@ -301,6 +302,45 @@ internal static class OpenAiResponseSchemas
         }
         """;
 
+    private const string ReplanningSchema = """
+        {
+          "type":"object",
+          "additionalProperties":false,
+          "properties":{
+            "decision":{
+              "anyOf":[
+                {
+                  "type":"object",
+                  "additionalProperties":false,
+                  "properties":{
+                    "kind":{"type":"string","enum":["revised_plan"]},
+                    "objective":{"type":"string"},
+                    "steps":{
+                      "type":"array",
+                      "items":{
+                        "type":"object","additionalProperties":false,
+                        "properties":{"step_id":{"type":"string"},"tool_id":{"type":"string"}},
+                        "required":["step_id","tool_id"]
+                      }
+                    }
+                  },
+                  "required":["kind","objective","steps"]
+                },
+                {
+                  "type":"object",
+                  "additionalProperties":false,
+                  "properties":{
+                    "kind":{"type":"string","enum":["finalize_now"]}
+                  },
+                  "required":["kind"]
+                }
+              ]
+            }
+          },
+          "required":["decision"]
+        }
+        """;
+
     private const string FinalizationSchema = """
         {
           "type":"object",
@@ -336,12 +376,18 @@ internal static class OpenAiResponseSchemas
         """;
 
     public static string For(LanguageModelCallPhase phase) =>
-        phase == LanguageModelCallPhase.Finalization ? FinalizationSchema : PlanningSchema;
+        phase == LanguageModelCallPhase.Finalization
+            ? FinalizationSchema
+            : phase == LanguageModelCallPhase.Replanning
+                ? ReplanningSchema
+                : PlanningSchema;
 }
 
 internal static class OpenAiDecisionParser
 {
-    public static AgentDecision Parse(string content)
+    public static AgentDecision Parse(
+        string content,
+        LanguageModelCallPhase phase = LanguageModelCallPhase.Unknown)
     {
         try
         {
@@ -360,6 +406,11 @@ internal static class OpenAiDecisionParser
                 {
                     throw new InvalidOperationException("The decision contains duplicate properties.");
                 }
+            }
+
+            if (phase == LanguageModelCallPhase.Replanning)
+            {
+                return ParseReplanning(root, propertyNames);
             }
 
             var kind = ReadRequiredString(root, "kind");
@@ -381,6 +432,45 @@ internal static class OpenAiDecisionParser
                 LanguageModelFailureCategory.InvalidModelResponse,
                 exception);
         }
+    }
+
+    private static InvestigationReplanDecision ParseReplanning(
+        JsonElement root,
+        IReadOnlySet<string> propertyNames)
+    {
+        EnsureProperties(propertyNames, "decision");
+        var decisionProperty = root.GetProperty("decision");
+        if (decisionProperty.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("The replan decision property must be an object.");
+        }
+
+        var decisionProperties = decisionProperty.EnumerateObject().ToArray();
+        var decisionPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in decisionProperties)
+        {
+            if (!decisionPropertyNames.Add(property.Name))
+            {
+                throw new InvalidOperationException("The replan decision contains duplicate properties.");
+            }
+        }
+
+        var kind = ReadRequiredString(decisionProperty, "kind");
+        return kind switch
+        {
+            "revised_plan" => new InvestigationReplanDecision.RevisedPlan(
+                ParseInvestigationPlanValue(decisionProperty, decisionPropertyNames)),
+            "finalize_now" => ParseFinalizeNow(decisionProperty, decisionPropertyNames),
+            _ => throw new InvalidOperationException("The replan decision kind is not supported.")
+        };
+    }
+
+    private static InvestigationReplanDecision.FinalizeNow ParseFinalizeNow(
+        JsonElement root,
+        IReadOnlySet<string> propertyNames)
+    {
+        EnsureProperties(propertyNames, "kind");
+        return new InvestigationReplanDecision.FinalizeNow();
     }
 
     private static AgentDecision ParseFinalAnswer(
@@ -484,6 +574,14 @@ internal static class OpenAiDecisionParser
         JsonElement root,
         IReadOnlySet<string> propertyNames)
     {
+        return new InvestigationPlanDecision(
+            ParseInvestigationPlanValue(root, propertyNames));
+    }
+
+    private static InvestigationPlan ParseInvestigationPlanValue(
+        JsonElement root,
+        IReadOnlySet<string> propertyNames)
+    {
         EnsureProperties(propertyNames, "kind", "objective", "steps");
         var stepsProperty = root.GetProperty("steps");
         if (stepsProperty.ValueKind != JsonValueKind.Array)
@@ -520,9 +618,9 @@ internal static class OpenAiDecisionParser
             throw new InvalidOperationException("The investigation plan must contain at least one step.");
         }
 
-        return new InvestigationPlanDecision(new InvestigationPlan(
+        return new InvestigationPlan(
             ReadRequiredString(root, "objective"),
-            steps));
+            steps);
     }
 
     private static string ReadRequiredString(JsonElement root, string propertyName)

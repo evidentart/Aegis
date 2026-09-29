@@ -31,7 +31,10 @@ public partial class App : Application
             ]);
         _observationRuntime = new ObservationRuntime(
             observationRegistry,
-            exception => _logger.LogError(exception, "Observation tool execution failed."));
+            exception => _logger.LogError(
+                "Observation tool execution failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none"));
 
         var databasePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -76,7 +79,10 @@ public partial class App : Application
                 languageModel,
                 _observationRuntime,
                 persistenceStore,
-                exception => _logger.LogError(exception, "Investigation persistence failed.")));
+                exception => _logger.LogError(
+                    "Investigation persistence failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                    exception.GetType().Name,
+                    exception.InnerException?.GetType().Name ?? "none")));
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

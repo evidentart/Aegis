@@ -128,6 +128,12 @@ public sealed class ApplicationInfoTests
                     new InvestigationStep("step-2", "fixed.tool"),
                     new InvestigationStep("step-3", "fixed.tool")
                 ])));
+
+        public Task<InvestigationReplanDecision> CreateReplanDecisionAsync(
+            InvestigationState state,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<InvestigationReplanDecision>(
+                new InvestigationReplanDecision.FinalizeNow());
     }
 
     private sealed class FixedObservationTool : IObservationTool

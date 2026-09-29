@@ -1,6 +1,7 @@
 using Aegis;
 using Aegis.Core;
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Text.Json;
 using Xunit;
 
@@ -8,6 +9,42 @@ namespace Aegis.Tests;
 
 public sealed class OpenAiLanguageModelTests
 {
+    [Fact]
+    public void LanguageModelExceptionRetainsOnlyNumericProviderStatusMetadata()
+    {
+        var exception = new LanguageModelException(
+            "safe message",
+            LanguageModelFailureCategory.ProviderRejected,
+            providerStatusCode: 400);
+        var noResponseException = new LanguageModelException(
+            "safe message",
+            LanguageModelFailureCategory.ProviderUnavailable,
+            providerStatusCode: 0);
+
+        Assert.Equal(400, exception.ProviderStatusCode);
+        Assert.Null(noResponseException.ProviderStatusCode);
+    }
+
+    [Fact]
+    public async Task TransfersClientResultStatusWithoutPersistingProviderMessage()
+    {
+        const string sensitiveProviderBody = "SENSITIVE_PROVIDER_BODY_MUST_NOT_PERSIST";
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            exception: new ClientResultException(
+                sensitiveProviderBody,
+                new TestPipelineResponse(429),
+                innerException: null)));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Finalization)));
+
+        Assert.Equal(LanguageModelFailureCategory.ProviderUnavailable, exception.Category);
+        Assert.Equal(429, exception.ProviderStatusCode);
+        Assert.DoesNotContain(sensitiveProviderBody, exception.Message);
+    }
+
     [Fact]
     public async Task MapsProviderNeutralMessagesAndConvertsFinalAnswer()
     {
@@ -157,15 +194,56 @@ public sealed class OpenAiLanguageModelTests
         Assert.Equal(JsonValueKind.Object, planningSchema.RootElement.ValueKind);
 
         var replanningClient = new FakeOpenAiChatClient(
-            "{\"kind\":\"investigation_plan\",\"objective\":\"Inspect.\",\"steps\":[{\"step_id\":\"step-1\",\"tool_id\":\"tool.one\"}]}");
+            "{\"decision\":{\"kind\":\"revised_plan\",\"objective\":\"Inspect.\",\"steps\":[{\"step_id\":\"step-2\",\"tool_id\":\"tool.one\"}]}}");
         var replanningModel = new OpenAiLanguageModel(replanningClient);
-        await replanningModel.CompleteAsync(new LanguageModelRequest(
+        var replanningDecision = await replanningModel.CompleteAsync(new LanguageModelRequest(
             [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
             LanguageModelCallPhase.Replanning));
 
+        var revisedPlan = Assert.IsType<InvestigationReplanDecision.RevisedPlan>(replanningDecision);
+        Assert.Equal("step-2", Assert.Single(revisedPlan.Plan.Steps).StepId);
         var replanningRequest = Assert.Single(replanningClient.Requests);
         Assert.Equal(OpenAiResponseSchemas.MaximumPlanningOutputTokens, replanningRequest.MaxOutputTokenCount);
         Assert.Equal(OpenAiReasoningEffort.Minimal, replanningRequest.ReasoningEffort);
+        using var replanningSchema = JsonDocument.Parse(replanningRequest.ResponseSchema);
+        var replanAnyOf = replanningSchema.RootElement
+            .GetProperty("properties")
+            .GetProperty("decision")
+            .GetProperty("anyOf");
+        Assert.Equal(2, replanAnyOf.GetArrayLength());
+        Assert.Contains("revised_plan", replanningRequest.ResponseSchema);
+        Assert.Contains("finalize_now", replanningRequest.ResponseSchema);
+    }
+
+    [Fact]
+    public async Task ParsesFinalizeNowReplanDecisionWithoutAnswerPayload()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"decision\":{\"kind\":\"finalize_now\"}}"));
+
+        var decision = await model.CompleteAsync(new LanguageModelRequest(
+            [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+            LanguageModelCallPhase.Replanning));
+
+        Assert.IsType<InvestigationReplanDecision.FinalizeNow>(decision);
+    }
+
+    [Theory]
+    [InlineData("{\"kind\":\"finalize_now\"}")]
+    [InlineData("{\"decision\":{\"kind\":\"final_answer\"}}")]
+    [InlineData("{\"decision\":{\"kind\":\"finalize_now\",\"summary\":\"answer\"}}")]
+    [InlineData("{\"decision\":{\"kind\":\"unknown\"}}")]
+    [InlineData("{\"decision\":{\"kind\":\"revised_plan\",\"objective\":\"Inspect.\",\"steps\":[]}}")]
+    public async Task RejectsMalformedReplanDecisions(string content)
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(content));
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Replanning)));
+
+        Assert.Equal(LanguageModelFailureCategory.InvalidModelResponse, exception.Category);
     }
 
     [Fact]
@@ -404,5 +482,56 @@ public sealed class OpenAiLanguageModelTests
                 OutputTokenCount: null,
                 TotalTokenCount: null));
         }
+    }
+
+    private sealed class TestPipelineResponse : PipelineResponse
+    {
+        private Stream _contentStream = Stream.Null;
+
+        public TestPipelineResponse(int status)
+        {
+            Status = status;
+        }
+
+        public override int Status { get; }
+
+        public override string ReasonPhrase => "Test response";
+
+        public override BinaryData Content => BinaryData.Empty;
+
+        public override Stream? ContentStream
+        {
+            get => _contentStream;
+            set => _contentStream = value ?? Stream.Null;
+        }
+
+        protected override PipelineResponseHeaders HeadersCore => new TestPipelineResponseHeaders();
+
+        protected override bool IsErrorCore => Status >= 400;
+
+        public override BinaryData BufferContent(CancellationToken cancellationToken = default) => Content;
+
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Content);
+
+        public override void Dispose() => _contentStream.Dispose();
+    }
+
+    private sealed class TestPipelineResponseHeaders : PipelineResponseHeaders
+    {
+        public override bool TryGetValue(string name, out string value)
+        {
+            value = string.Empty;
+            return false;
+        }
+
+        public override bool TryGetValues(string name, out IEnumerable<string> values)
+        {
+            values = [];
+            return false;
+        }
+
+        public override IEnumerator<KeyValuePair<string, string>> GetEnumerator() =>
+            Enumerable.Empty<KeyValuePair<string, string>>().GetEnumerator();
     }
 }
