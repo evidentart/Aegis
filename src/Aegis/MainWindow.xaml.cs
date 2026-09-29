@@ -1,8 +1,13 @@
 using Aegis.Core;
 using Aegis.Persistence;
 using Microsoft.Extensions.Logging;
+using Microsoft.UI;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Windows.Graphics;
+using WinRT.Interop;
 
 namespace Aegis;
 
@@ -13,6 +18,12 @@ public sealed partial class MainWindow : Window
     private readonly InvestigationHistoryService _historyService;
     private readonly BaselineService _baselineService;
     private InvestigationDetails? _selectedInvestigation;
+
+    private sealed record ObservationExecutionListItem(
+        InvestigationStepExecution Execution,
+        string ToolId,
+        InvestigationStepStatus Status,
+        string EligibilityText);
 
     public MainWindow(
         InvestigationService investigationService,
@@ -25,23 +36,80 @@ public sealed partial class MainWindow : Window
         _historyService = historyService ?? throw new ArgumentNullException(nameof(historyService));
         _baselineService = baselineService ?? throw new ArgumentNullException(nameof(baselineService));
         InitializeComponent();
+        SettingsVersionTextBlock.Text = $"Application version {ApplicationInfo.Version}";
+        RootNavigationView.SelectedItem = InvestigateNavigationItem;
+        ConfigureDefaultWindowSize();
     }
 
     private async void MainWindow_Activated(object sender, WindowActivatedEventArgs e) =>
         await RefreshHistoryAsync();
 
+    private void ConfigureDefaultWindowSize()
+    {
+        var handle = WindowNative.GetWindowHandle(this);
+        var windowId = Win32Interop.GetWindowIdFromWindow(handle);
+        AppWindow.GetFromWindowId(windowId).Resize(new SizeInt32(1180, 760));
+    }
+
+    private void RootNavigationView_SelectionChanged(
+        NavigationView sender,
+        NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItemContainer?.Tag is not string page)
+        {
+            return;
+        }
+
+        ShowPage(page);
+        if (string.Equals(page, "History", StringComparison.Ordinal))
+        {
+            _ = RefreshHistoryAsync();
+        }
+        else if (string.Equals(page, "Baselines", StringComparison.Ordinal))
+        {
+            _ = RefreshBaselinesAsync();
+        }
+    }
+
+    private void ShowPage(string page)
+    {
+        InvestigatePage.Visibility = string.Equals(page, "Investigate", StringComparison.Ordinal)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        HistoryPage.Visibility = string.Equals(page, "History", StringComparison.Ordinal)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        BaselinesPage.Visibility = string.Equals(page, "Baselines", StringComparison.Ordinal)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SettingsPage.Visibility = string.Equals(page, "Settings", StringComparison.Ordinal)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void NewInvestigationButton_Click(object sender, RoutedEventArgs e)
+    {
+        QuestionTextBox.Text = string.Empty;
+        StatusTextBlock.Text = string.Empty;
+        ResultCard.Visibility = Visibility.Collapsed;
+        InvestigationResultSectionsPanel.Children.Clear();
+        RootNavigationView.SelectedItem = InvestigateNavigationItem;
+        QuestionTextBox.Focus(FocusState.Programmatic);
+    }
+
     private async void InvestigateButton_Click(object sender, RoutedEventArgs e)
     {
         InvestigateButton.IsEnabled = false;
+        NewInvestigationButton.IsEnabled = false;
         BusyIndicator.IsActive = true;
         StatusTextBlock.Text = "Investigating…";
-        AnswerTextBlock.Visibility = Visibility.Collapsed;
+        ResultCard.Visibility = Visibility.Collapsed;
 
         try
         {
             var response = await _investigationService.InvestigateAsync(QuestionTextBox.Text);
-            AnswerTextBlock.Text = FormatReport(response.Report);
-            AnswerTextBlock.Visibility = Visibility.Visible;
+            RenderReport(InvestigationResultSectionsPanel, response.Report);
+            ResultCard.Visibility = Visibility.Visible;
             StatusTextBlock.Text = $"Investigation {response.InvestigationId} completed.";
         }
         catch (ArgumentException exception)
@@ -89,6 +157,7 @@ public sealed partial class MainWindow : Window
         {
             BusyIndicator.IsActive = false;
             InvestigateButton.IsEnabled = true;
+            NewInvestigationButton.IsEnabled = true;
             await RefreshHistoryAsync();
         }
     }
@@ -100,11 +169,7 @@ public sealed partial class MainWindow : Window
     {
         if (HistoryListView.SelectedItem is not InvestigationSummary summary)
         {
-            _selectedInvestigation = null;
-            ObservationListView.ItemsSource = null;
-            ObservationDetailTextBlock.Text = string.Empty;
-            CreateBaselineButton.IsEnabled = false;
-            HistoryDetailTextBlock.Text = string.Empty;
+            ClearHistoryDetails();
             return;
         }
 
@@ -113,79 +178,166 @@ public sealed partial class MainWindow : Window
             _selectedInvestigation = await _historyService.GetAsync(summary.InvestigationId);
             if (_selectedInvestigation is null)
             {
-                ObservationDetailTextBlock.Text = string.Empty;
-                HistoryDetailTextBlock.Text = "Investigation details are unavailable.";
+                ClearHistoryDetails();
+                HistoryEmptyDetailTextBlock.Text = "Investigation details are unavailable.";
                 return;
             }
 
             var investigation = _selectedInvestigation.Investigation;
-            var outcome = investigation.Outcome?.Report is { } report
-                ? FormatReport(report)
-                : investigation.Outcome?.FailureMessage ??
-                  investigation.Outcome?.FinalAnswer ??
-                  "No final outcome was recorded.";
-            var plans = string.Join(
+            HistoryEmptyDetailTextBlock.Visibility = Visibility.Collapsed;
+            HistoryDetailQuestionTextBlock.Visibility = Visibility.Visible;
+            HistoryDetailQuestionTextBlock.Text = investigation.Question;
+            HistoryDetailMetadataTextBlock.Visibility = Visibility.Visible;
+            HistoryDetailMetadataTextBlock.Text =
+                $"{investigation.LifecycleStatus} | {investigation.CreatedAtUtc.LocalDateTime:g}";
+
+            HistoryResultSectionsPanel.Children.Clear();
+            if (investigation.Outcome?.Report is { } report)
+            {
+                RenderReport(HistoryResultSectionsPanel, report);
+            }
+            else
+            {
+                AddMessageCard(
+                    HistoryResultSectionsPanel,
+                    investigation.Outcome?.FailureMessage ??
+                    investigation.Outcome?.FinalAnswer ??
+                    "No final outcome was recorded.");
+            }
+
+            HistoryPlansTextBlock.Text = string.Join(
                 Environment.NewLine,
                 investigation.Plans.Select(plan =>
-                    $"Plan {plan.PlanSequence}: " +
-                    string.Join(", ", plan.Plan.Steps.Select(step => step.ToolId))));
-            HistoryDetailTextBlock.Text =
-                $"{investigation.LifecycleStatus} · {investigation.CreatedAtUtc.LocalDateTime:g}{Environment.NewLine}" +
-                $"Question: {investigation.Question}{Environment.NewLine}" +
-                $"Outcome:{Environment.NewLine}{outcome}{Environment.NewLine}" +
-                $"Plans:{Environment.NewLine}{plans}";
-            ObservationListView.ItemsSource = investigation.StepExecutions;
+                    $"Plan {plan.PlanSequence}: {string.Join(", ", plan.Plan.Steps.Select(step => step.ToolId))}"));
+            HistoryPlansHeadingTextBlock.Visibility = investigation.Plans.Count == 0
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            ObservationListView.ItemsSource = investigation.StepExecutions
+                .Select(execution => CreateObservationExecutionListItem(investigation, execution))
+                .ToArray();
             ObservationDetailTextBlock.Text = string.Empty;
-            CreateBaselineButton.IsEnabled = false;
+            ObservationListView.SelectedItem = null;
+            UpdateBaselineSelectionState(null);
             BaselineStatusTextBlock.Text = string.Empty;
         }
         catch (Exception exception)
         {
             _logger.LogError(exception, "Investigation history could not be loaded.");
-            ObservationDetailTextBlock.Text = string.Empty;
-            HistoryDetailTextBlock.Text = "Investigation details are unavailable.";
+            ClearHistoryDetails();
+            HistoryEmptyDetailTextBlock.Text = "Investigation details are unavailable.";
         }
+    }
+
+    private void ClearHistoryDetails()
+    {
+        _selectedInvestigation = null;
+        HistoryEmptyDetailTextBlock.Visibility = Visibility.Visible;
+        HistoryEmptyDetailTextBlock.Text = "Select an investigation to view its reconstructed result.";
+        HistoryDetailQuestionTextBlock.Visibility = Visibility.Collapsed;
+        HistoryDetailQuestionTextBlock.Text = string.Empty;
+        HistoryDetailMetadataTextBlock.Visibility = Visibility.Collapsed;
+        HistoryDetailMetadataTextBlock.Text = string.Empty;
+        HistoryResultSectionsPanel.Children.Clear();
+        HistoryPlansHeadingTextBlock.Visibility = Visibility.Collapsed;
+        HistoryPlansTextBlock.Text = string.Empty;
+        ObservationListView.ItemsSource = null;
+        ObservationDetailTextBlock.Text = string.Empty;
+        UpdateBaselineSelectionState(null);
+        BaselineStatusTextBlock.Text = string.Empty;
     }
 
     private void ObservationListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ObservationListView.SelectedItem is not InvestigationStepExecution execution ||
-            execution.Result is null)
+        if (ObservationListView.SelectedItem is not ObservationExecutionListItem item ||
+            item.Execution.Result is null)
         {
             ObservationDetailTextBlock.Text = string.Empty;
-            CreateBaselineButton.IsEnabled = false;
+            UpdateBaselineSelectionState(null);
             return;
         }
 
+        var execution = item.Execution;
         ObservationDetailTextBlock.Text = FormatObservation(execution.Result);
-        CreateBaselineButton.IsEnabled =
-            execution.Status == InvestigationStepStatus.Completed &&
-            execution.Result.Status == ObservationStatus.Succeeded &&
-            string.Equals(execution.ToolId, WindowsSystemInfoObservationTool.ToolId, StringComparison.Ordinal) &&
-            execution.Result.Data is WindowsSystemInfo;
+        UpdateBaselineSelectionState(execution);
+    }
+
+    private static ObservationExecutionListItem CreateObservationExecutionListItem(
+        Investigation investigation,
+        InvestigationStepExecution execution) =>
+        new(
+            execution,
+            execution.ToolId,
+            execution.Status,
+            IsBaselineEligible(investigation, execution) ? "Baseline eligible" : string.Empty);
+
+    private static bool IsBaselineEligible(
+        Investigation investigation,
+        InvestigationStepExecution execution) =>
+        investigation.LifecycleStatus == InvestigationLifecycleStatus.Completed &&
+        execution.Result is not null &&
+        execution.Status == InvestigationStepStatus.Completed &&
+        execution.Result.Status == ObservationStatus.Succeeded &&
+        string.Equals(execution.ToolId, WindowsSystemInfoObservationTool.ToolId, StringComparison.Ordinal) &&
+        execution.Result.Data is WindowsSystemInfo &&
+        investigation.Plans.Any(plan =>
+            plan.PlanSequence == execution.PlanSequence &&
+            plan.Plan.Steps.Any(step =>
+                string.Equals(step.StepId, execution.StepId, StringComparison.Ordinal) &&
+                string.Equals(step.ToolId, execution.ToolId, StringComparison.Ordinal) &&
+                step.Status == InvestigationStepStatus.Completed));
+
+    private void UpdateBaselineSelectionState(InvestigationStepExecution? execution)
+    {
+        var investigation = _selectedInvestigation?.Investigation;
+        var isEligible = investigation is not null &&
+            execution is not null &&
+            IsBaselineEligible(investigation, execution);
+        CreateBaselineButton.IsEnabled = isEligible;
+
+        if (execution is null)
+        {
+            var hasEligibleObservation = ObservationListView.Items
+                .OfType<ObservationExecutionListItem>()
+                .Any(item => investigation is not null && IsBaselineEligible(investigation, item.Execution));
+            BaselineGuidanceTextBlock.Text = hasEligibleObservation
+                ? "Select a completed system-information observation to create a baseline."
+                : "No baseline-eligible system-information observation is available in this investigation.";
+        }
+        else
+        {
+            BaselineGuidanceTextBlock.Text = isEligible
+                ? "Selected observation is eligible for a baseline."
+                : "Select a completed system-information observation to create a baseline.";
+        }
     }
 
     private void BaselineListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (BaselineListView.SelectedItem is not BaselineSummary baseline)
         {
+            BaselineEmptyDetailTextBlock.Visibility = Visibility.Visible;
             BaselineDetailTextBlock.Text = string.Empty;
             return;
         }
 
+        BaselineEmptyDetailTextBlock.Visibility = Visibility.Collapsed;
         BaselineDetailTextBlock.Text =
             $"{baseline.Platform} {baseline.OsVersion} (build {baseline.Build?.ToString() ?? "unknown"}), " +
-            $"{baseline.Architecture}{Environment.NewLine}" +
-            $"Source investigation: {baseline.SourceInvestigationId}";
+            $"{baseline.Architecture}" + Environment.NewLine +
+            $"Source investigation: {baseline.SourceInvestigationId}" + Environment.NewLine +
+            $"Created: {baseline.CreatedAtUtc.LocalDateTime:g}" + Environment.NewLine +
+            $"Tool: {baseline.ToolId}";
     }
 
     private async void CreateBaselineButton_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedInvestigation is null ||
-            ObservationListView.SelectedItem is not InvestigationStepExecution execution)
+            ObservationListView.SelectedItem is not ObservationExecutionListItem item)
         {
             return;
         }
+
+        var execution = item.Execution;
 
         try
         {
@@ -212,23 +364,141 @@ public sealed partial class MainWindow : Window
         catch (Exception exception)
         {
             _logger.LogError(exception, "History could not be loaded.");
-            HistoryDetailTextBlock.Text = "History is unavailable right now.";
+            HistoryEmptyDetailTextBlock.Text = "History is unavailable right now.";
         }
     }
 
     private async Task RefreshBaselinesAsync()
     {
-        BaselineListView.ItemsSource = await _baselineService.ListAsync();
+        try
+        {
+            var baselines = await _baselineService.ListAsync();
+            BaselineListView.ItemsSource = baselines;
+            BaselineEmptyStatePanel.Visibility = baselines.Count == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Baselines could not be loaded.");
+            BaselineEmptyStatePanel.Visibility = Visibility.Visible;
+            BaselineEmptyDetailTextBlock.Text = "Baselines are unavailable right now.";
+        }
     }
+
+    private static void RenderReport(StackPanel target, InvestigationReport report)
+    {
+        target.Children.Clear();
+        var sections = InvestigationReportPresentation.BuildSections(report);
+        foreach (var section in sections)
+        {
+            var sectionPanel = new StackPanel
+            {
+                Spacing = 14,
+                MaxWidth = 840,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0)
+            };
+            sectionPanel.Children.Add(new TextBlock
+            {
+                Text = section.Heading,
+                FontSize = 16,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = GetBrush("AccentTextFillColorPrimaryBrush")
+            });
+
+            if (section.Items.Count == 0)
+            {
+                sectionPanel.Children.Add(new TextBlock
+                {
+                    Text = "None recorded.",
+                    Foreground = GetBrush("TextFillColorSecondaryBrush")
+                });
+            }
+            else
+            {
+                foreach (var item in section.Items)
+                {
+                    var itemPanel = new StackPanel
+                    {
+                        Spacing = 8,
+                        Margin = new Thickness(0, 0, 0, 8)
+                    };
+                    itemPanel.Children.Add(new TextBlock
+                    {
+                        Text = item.Text,
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 14,
+                        LineHeight = 22,
+                        Foreground = GetBrush("TextFillColorPrimaryBrush")
+                    });
+                    if (item.EvidenceStepIds.Count > 0)
+                    {
+                        itemPanel.Children.Add(new TextBlock
+                        {
+                            Text = $"Evidence: {string.Join(", ", item.EvidenceStepIds.Select(PresentationFormatting.FormatEvidenceStepId))}",
+                            TextWrapping = TextWrapping.Wrap,
+                            FontSize = 12,
+                            Foreground = GetBrush("TextFillColorTertiaryBrush")
+                        });
+                    }
+
+                    sectionPanel.Children.Add(itemPanel);
+                }
+            }
+
+            target.Children.Add(new Border
+            {
+                Padding = new Thickness(20),
+                CornerRadius = new CornerRadius(12),
+                Background = GetSectionBrush(),
+                BorderThickness = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Child = sectionPanel
+            });
+        }
+    }
+
+    private static void AddMessageCard(StackPanel target, string message)
+    {
+        target.Children.Add(new Border
+        {
+            Padding = new Thickness(14),
+            CornerRadius = new CornerRadius(8),
+            Background = GetSectionBrush(),
+            BorderBrush = GetCardStrokeBrush(),
+            BorderThickness = new Thickness(1),
+            Child = new TextBlock
+            {
+                Text = message,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = 22,
+                Foreground = GetBrush("TextFillColorSecondaryBrush")
+            }
+        });
+    }
+
+    private static Brush? GetCardBrush() => GetBrush("CardBackgroundFillColorDefaultBrush");
+
+    private static Brush? GetSectionBrush() =>
+        GetBrush("LayerFillColorDefaultBrush") ?? GetCardBrush();
+
+    private static Brush? GetCardStrokeBrush() => GetBrush("CardStrokeColorDefaultBrush");
+
+    private static Brush? GetBrush(string key) =>
+        Application.Current.Resources.ContainsKey(key)
+            ? Application.Current.Resources[key] as Brush
+            : null;
 
     private static string FormatObservation(ObservationResult result) => result.Data switch
     {
         WindowsSystemInfo data =>
             $"System: {data.Platform} {data.OsVersion} build {data.Build?.ToString() ?? "unknown"}, {data.Architecture}",
         WindowsPerformanceSystem data =>
-            $"System performance at {result.ObservedAtUtc.LocalDateTime:g}: CPU {data.CpuUtilizationPercent:F1}%, " +
-            $"memory {data.MemoryLoadPercent}% ({FormatBytes(data.PhysicalMemoryAvailableBytes)} available of " +
-            $"{FormatBytes(data.PhysicalMemoryTotalBytes)}), sample {data.SampleDuration.TotalMilliseconds:F0} ms.",
+            $"System performance at {result.ObservedAtUtc.LocalDateTime:g}: CPU " +
+            $"{PresentationFormatting.FormatPercentage(data.CpuUtilizationPercent)}, " +
+            $"memory {data.MemoryLoadPercent}% ({PresentationFormatting.FormatBytes(data.PhysicalMemoryAvailableBytes)} available of " +
+            $"{PresentationFormatting.FormatBytes(data.PhysicalMemoryTotalBytes)}), sample {data.SampleDuration.TotalMilliseconds:F0} ms.",
         WindowsPerformanceTopProcesses data =>
             $"Top accessible processes at {result.ObservedAtUtc.LocalDateTime:g}, sample " +
             $"{data.SampleDuration.TotalMilliseconds:F0} ms. CPU: " +
@@ -260,68 +530,8 @@ public sealed partial class MainWindow : Window
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string FormatReport(InvestigationReport report)
-    {
-        ArgumentNullException.ThrowIfNull(report);
-        var lines = new List<string> { $"Summary: {report.Summary}" };
-        AppendEvidenceStatements(lines, "Observed facts", report.ObservedFacts);
-        AppendEvidenceStatements(lines, "Conclusions", report.Conclusions);
-        AppendEvidenceStatements(lines, "Hypotheses", report.Hypotheses);
-        AppendTextStatements(lines, "Uncertainty", report.Uncertainties);
-        AppendTextStatements(lines, "Recommendations", report.Recommendations);
-        return string.Join(Environment.NewLine, lines);
-    }
-
-    private static void AppendEvidenceStatements(
-        ICollection<string> lines,
-        string heading,
-        IReadOnlyList<EvidenceStatement> statements)
-    {
-        if (statements.Count == 0)
-        {
-            return;
-        }
-
-        lines.Add($"{heading}:");
-        foreach (var statement in statements)
-        {
-            lines.Add($"- {statement.Text}");
-            lines.Add($"  Evidence: {string.Join(", ", statement.EvidenceStepIds)}");
-        }
-    }
-
-    private static void AppendTextStatements(
-        ICollection<string> lines,
-        string heading,
-        IReadOnlyList<string> statements)
-    {
-        if (statements.Count == 0)
-        {
-            return;
-        }
-
-        lines.Add($"{heading}:");
-        foreach (var statement in statements)
-        {
-            lines.Add($"- {statement}");
-        }
-    }
-
     private static string FormatProcess(WindowsPerformanceProcess process) =>
-        $"{process.ProcessName} (PID {process.ProcessId}, CPU {process.CpuUtilizationPercent:F1}%, " +
-        $"working set {FormatBytes(process.WorkingSetBytes)})";
-
-    private static string FormatBytes(ulong bytes)
-    {
-        const double kilobyte = 1024;
-        const double megabyte = kilobyte * 1024;
-        const double gigabyte = megabyte * 1024;
-        return bytes switch
-        {
-            >= (ulong)gigabyte => $"{bytes / gigabyte:F1} GB",
-            >= (ulong)megabyte => $"{bytes / megabyte:F1} MB",
-            >= (ulong)kilobyte => $"{bytes / kilobyte:F1} KB",
-            _ => $"{bytes} B"
-        };
-    }
+        $"{process.ProcessName} (PID {process.ProcessId}, CPU " +
+        $"{PresentationFormatting.FormatPercentage(process.CpuUtilizationPercent)}, " +
+        $"working set {PresentationFormatting.FormatBytes(process.WorkingSetBytes)})";
 }

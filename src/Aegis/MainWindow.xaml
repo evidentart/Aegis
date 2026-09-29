@@ -1,54 +1,406 @@
-<Window x:Class="Aegis.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Aegis" Activated="MainWindow_Activated">
+<Window x:Class="Aegis.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Aegis"
+        Title="Aegis"
+        Activated="MainWindow_Activated">
   <Window.SystemBackdrop>
     <MicaBackdrop />
   </Window.SystemBackdrop>
-  <Grid Padding="48" RowSpacing="16">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="*" />
-      <RowDefinition Height="260" />
-    </Grid.RowDefinitions>
-    <StackPanel Spacing="8">
-      <TextBlock Text="Aegis" FontSize="32" FontWeight="SemiBold" />
-      <TextBlock Text="A calm, focused workspace for the work ahead." Opacity="0.72" FontSize="16" />
-    </StackPanel>
-    <Border Grid.Row="1" Padding="24" CornerRadius="12" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
-      <StackPanel Spacing="8" VerticalAlignment="Center">
-        <TextBlock Text="Welcome to Aegis" FontSize="22" FontWeight="SemiBold" />
-        <TextBlock Text="Your workspace is ready." Opacity="0.72" />
-        <TextBlock Text="Ask Aegis" FontSize="18" FontWeight="SemiBold" Margin="0,16,0,0" />
-        <TextBox x:Name="QuestionTextBox" PlaceholderText="Type an investigation question" MinHeight="40" />
-        <Button x:Name="InvestigateButton" Content="Investigate" Click="InvestigateButton_Click" HorizontalAlignment="Left" MinWidth="120" />
-        <ProgressRing x:Name="BusyIndicator" IsActive="False" Width="24" Height="24" HorizontalAlignment="Left" />
-        <TextBlock x:Name="StatusTextBlock" Opacity="0.72" TextWrapping="Wrap" />
-        <TextBlock x:Name="AnswerTextBlock" TextWrapping="Wrap" Visibility="Collapsed" />
-      </StackPanel>
-    </Border>
-    <Grid Grid.Row="2" ColumnSpacing="16">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="1.1*" />
-        <ColumnDefinition Width="1.4*" />
-      </Grid.ColumnDefinitions>
-      <StackPanel Grid.Column="0" Spacing="6">
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <TextBlock Text="History" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
-          <Button Content="Refresh" Click="RefreshHistoryButton_Click" />
+  <Grid>
+    <Grid.Resources>
+      <local:LocalDateTimeConverter x:Key="LocalDateTimeConverter" />
+      <Style x:Key="SurfaceCardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="12" />
+      </Style>
+      <Style x:Key="PageDescriptionTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+      </Style>
+      <Style x:Key="MetadataTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+        <Setter Property="FontSize" Value="12" />
+      </Style>
+      <Style x:Key="ReportHostStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="0" />
+      </Style>
+    </Grid.Resources>
+    <NavigationView x:Name="RootNavigationView"
+                    IsSettingsVisible="False"
+                    IsBackButtonVisible="Collapsed"
+                    PaneDisplayMode="Auto"
+                    SelectionChanged="RootNavigationView_SelectionChanged">
+      <NavigationView.PaneHeader>
+        <StackPanel Padding="16,18,16,12" Spacing="2">
+          <TextBlock Text="Aegis" FontSize="20" FontWeight="SemiBold" />
+          <TextBlock Text="System investigation" Style="{StaticResource PageDescriptionTextStyle}" FontSize="12" />
         </StackPanel>
-        <ListView x:Name="HistoryListView" DisplayMemberPath="DisplayText" SelectionChanged="HistoryListView_SelectionChanged" />
-      </StackPanel>
-      <StackPanel Grid.Column="1" Spacing="6">
-        <TextBlock Text="Investigation detail" FontSize="18" FontWeight="SemiBold" />
-        <TextBlock x:Name="HistoryDetailTextBlock" TextWrapping="Wrap" Opacity="0.82" />
-        <ListView x:Name="ObservationListView" DisplayMemberPath="DisplayText" SelectionChanged="ObservationListView_SelectionChanged" MaxHeight="90" />
-        <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
-          <TextBlock x:Name="ObservationDetailTextBlock" TextWrapping="Wrap" Opacity="0.72" />
-        </ScrollViewer>
-        <Button x:Name="CreateBaselineButton" Content="Create baseline from selected observation" Click="CreateBaselineButton_Click" IsEnabled="False" HorizontalAlignment="Left" />
-        <TextBlock x:Name="BaselineStatusTextBlock" TextWrapping="Wrap" Opacity="0.72" />
-        <TextBlock Text="Baselines" FontWeight="SemiBold" />
-        <ListView x:Name="BaselineListView" DisplayMemberPath="DisplayText" SelectionChanged="BaselineListView_SelectionChanged" MaxHeight="70" />
-        <TextBlock x:Name="BaselineDetailTextBlock" TextWrapping="Wrap" Opacity="0.72" />
-      </StackPanel>
-    </Grid>
+      </NavigationView.PaneHeader>
+      <NavigationView.MenuItems>
+        <NavigationViewItem x:Name="InvestigateNavigationItem" Content="Investigate" Tag="Investigate">
+          <NavigationViewItem.Icon>
+            <SymbolIcon Symbol="Find" />
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem x:Name="HistoryNavigationItem" Content="History" Tag="History">
+          <NavigationViewItem.Icon>
+            <SymbolIcon Symbol="Clock" />
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem x:Name="BaselinesNavigationItem" Content="Baselines" Tag="Baselines">
+          <NavigationViewItem.Icon>
+            <SymbolIcon Symbol="Library" />
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
+      </NavigationView.MenuItems>
+      <NavigationView.FooterMenuItems>
+        <NavigationViewItem x:Name="SettingsNavigationItem" Content="Settings" Tag="Settings">
+          <NavigationViewItem.Icon>
+            <SymbolIcon Symbol="Setting" />
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
+      </NavigationView.FooterMenuItems>
+      <NavigationView.Content>
+        <Grid Padding="24" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+          <Grid x:Name="InvestigatePage">
+            <VisualStateManager.VisualStateGroups>
+              <VisualStateGroup>
+                <VisualState x:Name="WideInvestigateHeader">
+                  <VisualState.StateTriggers>
+                    <AdaptiveTrigger MinWindowWidth="1200" />
+                  </VisualState.StateTriggers>
+                  <VisualState.Setters>
+                    <Setter Target="NewInvestigationButton.(Grid.Row)" Value="0" />
+                    <Setter Target="NewInvestigationButton.(Grid.Column)" Value="1" />
+                    <Setter Target="NewInvestigationButton.(Grid.ColumnSpan)" Value="1" />
+                  </VisualState.Setters>
+                </VisualState>
+              </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+            <ScrollViewer HorizontalContentAlignment="Stretch"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+              <Grid HorizontalAlignment="Stretch">
+                <Grid MaxWidth="880"
+                      HorizontalAlignment="Stretch"
+                      RowSpacing="20">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0"
+                      HorizontalAlignment="Stretch"
+                      RowSpacing="8"
+                      ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="0" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
+                  <StackPanel MinWidth="0" Spacing="4">
+                    <TextBlock Text="Investigate" FontSize="28" FontWeight="SemiBold" />
+                    <TextBlock Text="Ask a focused question about this Windows system."
+                               Style="{StaticResource PageDescriptionTextStyle}" />
+                  </StackPanel>
+                  <Button Grid.Row="1"
+                          Grid.Column="0"
+                          Grid.ColumnSpan="2"
+                          x:Name="NewInvestigationButton"
+                          Content="New investigation"
+                          Click="NewInvestigationButton_Click"
+                          HorizontalAlignment="Left"
+                          VerticalAlignment="Center" />
+                </Grid>
+
+                <Border Grid.Row="1"
+                        Style="{StaticResource SurfaceCardStyle}"
+                        HorizontalAlignment="Stretch"
+                        Padding="20">
+                  <StackPanel Spacing="14">
+                    <TextBlock Text="Investigation question" FontWeight="SemiBold" />
+                    <TextBox x:Name="QuestionTextBox"
+                             PlaceholderText="For example: What may explain the recent system errors?"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             MinHeight="76" />
+                    <Grid ColumnSpacing="12">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Button x:Name="InvestigateButton"
+                              Style="{StaticResource AccentButtonStyle}"
+                              Content="Investigate"
+                              Click="InvestigateButton_Click"
+                              MinWidth="120" />
+                      <ProgressRing Grid.Column="1"
+                                    x:Name="BusyIndicator"
+                                    IsActive="False"
+                                    Width="24"
+                                    Height="24"
+                                    VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="2"
+                                 x:Name="StatusTextBlock"
+                                 VerticalAlignment="Center"
+                                 TextWrapping="Wrap"
+                                 Opacity="0.72" />
+                    </Grid>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Row="2"
+                        x:Name="ResultCard"
+                        Style="{StaticResource ReportHostStyle}"
+                        HorizontalAlignment="Stretch"
+                        Visibility="Collapsed"
+                        Padding="0,8,0,16">
+                  <StackPanel Spacing="16">
+                    <TextBlock Text="Investigation result"
+                               FontSize="20"
+                               FontWeight="SemiBold"
+                               Margin="20,0" />
+                    <StackPanel x:Name="InvestigationResultSectionsPanel" Spacing="16" />
+                  </StackPanel>
+                </Border>
+                </Grid>
+              </Grid>
+            </ScrollViewer>
+          </Grid>
+
+          <Grid x:Name="HistoryPage" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid ColumnSpacing="16">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <StackPanel Spacing="4">
+                <TextBlock Text="History" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Review persisted investigations and their observations." Style="{StaticResource PageDescriptionTextStyle}" />
+              </StackPanel>
+              <Button Grid.Column="1" Content="Refresh" Click="RefreshHistoryButton_Click" VerticalAlignment="Center" />
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="0,20,0,0" ColumnSpacing="20">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="360" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Border Style="{StaticResource SurfaceCardStyle}" Padding="12">
+                <Grid RowSpacing="8">
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                  </Grid.RowDefinitions>
+                  <TextBlock Text="Investigations" FontWeight="SemiBold" />
+                  <ListView Grid.Row="1"
+                            x:Name="HistoryListView"
+                            SelectionChanged="HistoryListView_SelectionChanged"
+                            BorderThickness="0">
+                    <ListView.ItemTemplate>
+                      <DataTemplate>
+                        <Grid Padding="8,9" RowSpacing="4">
+                          <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                          </Grid.RowDefinitions>
+                          <TextBlock Text="{Binding Question}"
+                                     FontSize="14"
+                                     TextWrapping="Wrap"
+                                     TextTrimming="CharacterEllipsis"
+                                     MaxLines="2" />
+                          <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="{Binding LifecycleStatus}" Style="{StaticResource MetadataTextStyle}" />
+                            <TextBlock Text="•" Style="{StaticResource MetadataTextStyle}" Opacity="0.72" />
+                            <TextBlock Text="{Binding CreatedAtUtc, Converter={StaticResource LocalDateTimeConverter}}"
+                                       Style="{StaticResource MetadataTextStyle}" />
+                          </StackPanel>
+                        </Grid>
+                      </DataTemplate>
+                    </ListView.ItemTemplate>
+                  </ListView>
+                </Grid>
+              </Border>
+              <Border Grid.Column="1"
+                      Style="{StaticResource ReportHostStyle}"
+                      Padding="20">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <StackPanel Spacing="12">
+                    <TextBlock x:Name="HistoryEmptyDetailTextBlock"
+                               Text="Select an investigation to view its reconstructed result."
+                               Style="{StaticResource PageDescriptionTextStyle}"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="HistoryDetailQuestionTextBlock"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               TextWrapping="Wrap"
+                               Visibility="Collapsed" />
+                    <TextBlock x:Name="HistoryDetailMetadataTextBlock"
+                               Style="{StaticResource MetadataTextStyle}"
+                               TextWrapping="Wrap"
+                               Visibility="Collapsed" />
+                    <StackPanel x:Name="HistoryResultSectionsPanel" Spacing="16" />
+                    <TextBlock Text="Plan history" FontWeight="SemiBold" Visibility="Collapsed" x:Name="HistoryPlansHeadingTextBlock" />
+                    <TextBlock x:Name="HistoryPlansTextBlock"
+                               Style="{StaticResource MetadataTextStyle}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Text="Observation executions" FontWeight="SemiBold" />
+                    <ListView x:Name="ObservationListView"
+                              SelectionChanged="ObservationListView_SelectionChanged"
+                              MaxHeight="180"
+                              BorderThickness="0">
+                      <ListView.ItemTemplate>
+                        <DataTemplate>
+                          <Grid Padding="8,7" RowSpacing="2">
+                            <Grid.RowDefinitions>
+                              <RowDefinition Height="Auto" />
+                              <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="{Binding ToolId}"
+                                       FontSize="13"
+                                       TextWrapping="Wrap" />
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                              <TextBlock Text="{Binding Status}" Style="{StaticResource MetadataTextStyle}" />
+                              <TextBlock Text="{Binding EligibilityText}"
+                                         Style="{StaticResource MetadataTextStyle}"
+                                         Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                          </Grid>
+                        </DataTemplate>
+                      </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="ObservationDetailTextBlock" TextWrapping="Wrap" Opacity="0.78" />
+                    <Button x:Name="CreateBaselineButton"
+                            Content="Create baseline from selected system observation"
+                            Click="CreateBaselineButton_Click"
+                            IsEnabled="False"
+                            HorizontalAlignment="Left" />
+                    <TextBlock x:Name="BaselineGuidanceTextBlock"
+                               Style="{StaticResource MetadataTextStyle}"
+                               Text="Select a completed system-information observation to create a baseline."
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="BaselineStatusTextBlock"
+                               Style="{StaticResource MetadataTextStyle}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                </ScrollViewer>
+              </Border>
+            </Grid>
+          </Grid>
+
+          <Grid x:Name="BaselinesPage" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <StackPanel Spacing="4">
+              <TextBlock Text="Baselines" FontSize="28" FontWeight="SemiBold" />
+              <TextBlock Text="Review approved system-information baselines created from completed investigations."
+                         Style="{StaticResource PageDescriptionTextStyle}" />
+            </StackPanel>
+            <Grid Grid.Row="1" Margin="0,20,0,0" ColumnSpacing="20">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="360" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Border Style="{StaticResource SurfaceCardStyle}" Padding="12">
+                <Grid RowSpacing="8">
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                  </Grid.RowDefinitions>
+                  <TextBlock Text="Saved baselines" FontWeight="SemiBold" />
+                  <Grid Grid.Row="1">
+                    <ListView x:Name="BaselineListView"
+                              DisplayMemberPath="DisplayText"
+                              SelectionChanged="BaselineListView_SelectionChanged"
+                              BorderThickness="0" />
+                    <StackPanel x:Name="BaselineEmptyStatePanel"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Padding="16"
+                                Spacing="6"
+                                IsHitTestVisible="False">
+                      <TextBlock Text="No saved baselines yet."
+                                 FontWeight="SemiBold"
+                                 HorizontalAlignment="Center"
+                                 TextAlignment="Center" />
+                      <TextBlock Text="Create one from an eligible system-information observation in History."
+                                 MaxWidth="250"
+                                 TextWrapping="Wrap"
+                                 TextAlignment="Center"
+                                 Style="{StaticResource MetadataTextStyle}" />
+                    </StackPanel>
+                  </Grid>
+                </Grid>
+              </Border>
+              <Border Grid.Column="1" Style="{StaticResource SurfaceCardStyle}" Padding="20">
+                <StackPanel Spacing="12">
+                  <TextBlock Text="Baseline details" FontSize="20" FontWeight="SemiBold" />
+                  <TextBlock x:Name="BaselineEmptyDetailTextBlock"
+                             Text="Select a baseline to view its recorded platform details."
+                             Style="{StaticResource PageDescriptionTextStyle}"
+                             TextWrapping="Wrap" />
+                  <TextBlock x:Name="BaselineDetailTextBlock" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+            </Grid>
+          </Grid>
+
+          <Grid x:Name="SettingsPage" Visibility="Collapsed">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <StackPanel MaxWidth="760" HorizontalAlignment="Left" Spacing="16">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Settings" FontSize="28" FontWeight="SemiBold" />
+                  <TextBlock Text="Aegis keeps configuration intentionally minimal."
+                             Style="{StaticResource PageDescriptionTextStyle}" />
+                </StackPanel>
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="20">
+                  <StackPanel Spacing="10">
+                    <TextBlock Text="Aegis" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock x:Name="SettingsVersionTextBlock" Style="{StaticResource MetadataTextStyle}" />
+                    <TextBlock Text="Read-only Windows investigation"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Margin="0,6,0,0" />
+                    <TextBlock Text="A calm workspace for observing narrowly scoped Windows information and understanding the evidence without changing the system."
+                               Style="{StaticResource PageDescriptionTextStyle}" />
+                    <TextBlock Text="The app follows the system light or dark theme."
+                               Style="{StaticResource MetadataTextStyle}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+                <Border Style="{StaticResource SurfaceCardStyle}" Padding="20">
+                  <StackPanel Spacing="10">
+                    <TextBlock Text="AI configuration" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="Live OpenAI configuration uses the existing process-scoped environment variables below."
+                               Style="{StaticResource PageDescriptionTextStyle}" />
+                    <StackPanel Spacing="4" Margin="0,4,0,0">
+                      <TextBlock Text="AEGIS_OPENAI_API_KEY" FontFamily="Consolas" FontSize="13" Opacity="0.78" />
+                      <TextBlock Text="AEGIS_OPENAI_MODEL" FontFamily="Consolas" FontSize="13" Opacity="0.78" />
+                    </StackPanel>
+                    <TextBlock Text="Credentials are not displayed, stored, or edited here."
+                               Style="{StaticResource MetadataTextStyle}" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+        </Grid>
+      </NavigationView.Content>
+    </NavigationView>
   </Grid>
 </Window>
