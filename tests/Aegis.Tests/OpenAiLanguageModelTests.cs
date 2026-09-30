@@ -129,6 +129,104 @@ public sealed class OpenAiLanguageModelTests
     }
 
     [Fact]
+    public async Task ReportsEmptyFinalizationContentWithoutProviderPayload()
+    {
+        LanguageModelCallDiagnostics? diagnostics = null;
+        var model = new OpenAiLanguageModel(
+            new FakeOpenAiChatClient("   ", finishReason: "stop"),
+            reportDiagnostics: value => diagnostics = value);
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Finalization)));
+
+        Assert.Equal(LanguageModelFailureCategory.InvalidModelResponse, exception.Category);
+        Assert.Equal("The language model returned an empty decision.", exception.Message);
+        Assert.NotNull(diagnostics);
+        Assert.Equal(LanguageModelResponseFailureReason.EmptyContent, diagnostics!.ResponseFailureReason);
+        Assert.Equal("stop", diagnostics.FinishReason);
+    }
+
+    [Fact]
+    public async Task ReportsParserRejectionForMalformedFinalizationResponse()
+    {
+        LanguageModelCallDiagnostics? diagnostics = null;
+        var model = new OpenAiLanguageModel(
+            new FakeOpenAiChatClient("not json"),
+            reportDiagnostics: value => diagnostics = value);
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Finalization)));
+
+        Assert.Equal(LanguageModelFailureCategory.InvalidModelResponse, exception.Category);
+        Assert.Equal("The language model returned an invalid decision.", exception.Message);
+        Assert.NotNull(diagnostics);
+        Assert.Equal(LanguageModelResponseFailureReason.ParserRejected, diagnostics!.ResponseFailureReason);
+        Assert.Equal("stop", diagnostics.FinishReason);
+    }
+
+    [Fact]
+    public async Task ReportsParserRejectionForSchemaShapedResponseWithoutEvidenceReference()
+    {
+        LanguageModelCallDiagnostics? diagnostics = null;
+        var model = new OpenAiLanguageModel(
+            new FakeOpenAiChatClient(
+                "{\"kind\":\"final_answer\",\"summary\":\"Summary\",\"observed_facts\":[{\"text\":\"Fact\",\"evidence_step_ids\":[]}],\"conclusions\":[],\"hypotheses\":[],\"uncertainties\":[],\"recommendations\":[]}"),
+            reportDiagnostics: value => diagnostics = value);
+
+        var exception = await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Finalization)));
+
+        Assert.Equal(LanguageModelFailureCategory.InvalidModelResponse, exception.Category);
+        Assert.Equal(LanguageModelResponseFailureReason.ParserRejected, diagnostics?.ResponseFailureReason);
+        Assert.DoesNotContain("Fact", exception.Message);
+    }
+
+    [Fact]
+    public async Task PreservesLengthFinishMetadataForParserRejectedResponse()
+    {
+        LanguageModelCallDiagnostics? diagnostics = null;
+        var model = new OpenAiLanguageModel(
+            new FakeOpenAiChatClient("{\"kind\":", finishReason: "length"),
+            reportDiagnostics: value => diagnostics = value);
+
+        await Assert.ThrowsAsync<LanguageModelException>(() =>
+            model.CompleteAsync(new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Finalization)));
+
+        Assert.NotNull(diagnostics);
+        Assert.Equal(LanguageModelResponseFailureReason.ParserRejected, diagnostics!.ResponseFailureReason);
+        Assert.Equal("length", diagnostics.FinishReason);
+    }
+
+    [Fact]
+    public async Task ParsesFinalizationWithObservedFactsConclusionsAndHypotheses()
+    {
+        var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
+            "{\"kind\":\"final_answer\",\"summary\":\"Performance is constrained.\",\"observed_facts\":[{\"text\":\"A process used CPU.\",\"evidence_step_ids\":[\"top-processes\"]}],\"conclusions\":[{\"text\":\"The process is a likely contributor.\",\"evidence_step_ids\":[\"top-processes\",\"system-performance\"]}],\"hypotheses\":[{\"text\":\"Recent system errors may contribute.\",\"evidence_step_ids\":[\"recent-errors\"]}],\"uncertainties\":[\"The observations are point-in-time samples.\"],\"recommendations\":[\"Collect another sample.\"]}"));
+
+        var decision = Assert.IsType<FinalAnswerDecision>(await model.CompleteAsync(
+            new LanguageModelRequest(
+                [new LanguageModelMessage(LanguageModelMessageRole.User, "Question.")],
+                LanguageModelCallPhase.Finalization)));
+
+        Assert.Single(decision.Report.ObservedFacts);
+        Assert.Single(decision.Report.Conclusions);
+        Assert.Single(decision.Report.Hypotheses);
+        Assert.Equal("top-processes", Assert.Single(decision.Report.ObservedFacts[0].EvidenceStepIds));
+        Assert.Equal(
+            ["top-processes", "system-performance"],
+            decision.Report.Conclusions[0].EvidenceStepIds);
+        Assert.Equal("recent-errors", Assert.Single(decision.Report.Hypotheses[0].EvidenceStepIds));
+    }
+
+    [Fact]
     public async Task ConvertsInvestigationPlanDecision()
     {
         var model = new OpenAiLanguageModel(new FakeOpenAiChatClient(
@@ -447,15 +545,18 @@ public sealed class OpenAiLanguageModelTests
         private readonly string? _answer;
         private readonly Exception? _exception;
         private readonly CancellationToken? _cancellationToken;
+        private readonly string _finishReason;
 
         public FakeOpenAiChatClient(
             string? answer = null,
             Exception? exception = null,
-            CancellationToken? cancellationToken = null)
+            CancellationToken? cancellationToken = null,
+            string finishReason = "stop")
         {
             _answer = answer;
             _exception = exception;
             _cancellationToken = cancellationToken;
+            _finishReason = finishReason;
         }
 
         public List<OpenAiCompletionRequest> Requests { get; } = [];
@@ -477,7 +578,7 @@ public sealed class OpenAiLanguageModelTests
 
             return Task.FromResult(new OpenAiCompletion(
                 _answer ?? string.Empty,
-                "stop",
+                _finishReason,
                 InputTokenCount: null,
                 OutputTokenCount: null,
                 TotalTokenCount: null));

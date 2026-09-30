@@ -116,10 +116,15 @@ public partial class App : Application
         }
 
         _logger.LogWarning(
-            "OpenAI call failed. Phase={Phase} Model={Model} Category={Category} ProviderStatusCode={ProviderStatusCode} ElapsedMs={ElapsedMs}.",
+            "OpenAI call failed. Phase={Phase} Model={Model} Category={Category} ResponseFailureReason={ResponseFailureReason} FinishReason={FinishReason} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens} ProviderStatusCode={ProviderStatusCode} ElapsedMs={ElapsedMs}.",
             diagnostics.Phase,
             diagnostics.Model,
             diagnostics.FailureCategory,
+            diagnostics.ResponseFailureReason?.ToString() ?? "none",
+            diagnostics.FinishReason ?? "unknown",
+            diagnostics.InputTokenCount?.ToString() ?? "unknown",
+            diagnostics.OutputTokenCount?.ToString() ?? "unknown",
+            diagnostics.TotalTokenCount?.ToString() ?? "unknown",
             diagnostics.ProviderStatusCode?.ToString() ?? "none",
             diagnostics.Elapsed.TotalMilliseconds.ToString("F0"));
     }

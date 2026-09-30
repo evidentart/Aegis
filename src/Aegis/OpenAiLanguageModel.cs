@@ -121,6 +121,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
             OpenAiResponseSchemas.For(request.Phase),
             GetReasoningEffortLevel(request.Phase));
         OpenAiCompletion? completion = null;
+        LanguageModelResponseFailureReason? responseFailureReason = null;
 
         try
         {
@@ -130,16 +131,29 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
 
             if (string.IsNullOrWhiteSpace(completion.Content))
             {
+                responseFailureReason = LanguageModelResponseFailureReason.EmptyContent;
                 throw new LanguageModelException(
                     "The language model returned an empty decision.",
                     LanguageModelFailureCategory.InvalidModelResponse);
             }
 
-            var decision = OpenAiDecisionParser.Parse(completion.Content, request.Phase);
+            AgentDecision decision;
+            try
+            {
+                decision = OpenAiDecisionParser.Parse(completion.Content, request.Phase);
+            }
+            catch (LanguageModelException exception) when (
+                exception.Category == LanguageModelFailureCategory.InvalidModelResponse)
+            {
+                responseFailureReason = LanguageModelResponseFailureReason.ParserRejected;
+                throw;
+            }
+
             ReportDiagnostics(
                 request,
                 LanguageModelCallOutcome.Succeeded,
                 failureCategory: null,
+                responseFailureReason: null,
                 completion,
                 stopwatch.Elapsed,
                 providerStatusCode: null);
@@ -151,6 +165,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                 request,
                 LanguageModelCallOutcome.Failed,
                 exception.Category,
+                responseFailureReason,
                 completion,
                 stopwatch.Elapsed,
                 providerStatusCode: null);
@@ -162,6 +177,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                 request,
                 LanguageModelCallOutcome.Failed,
                 LanguageModelFailureCategory.Cancelled,
+                responseFailureReason: null,
                 completion: null,
                 stopwatch.Elapsed,
                 providerStatusCode: null);
@@ -174,6 +190,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                 request,
                 LanguageModelCallOutcome.Failed,
                 category,
+                responseFailureReason: null,
                 completion: null,
                 stopwatch.Elapsed,
                 exception.Status);
@@ -189,6 +206,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                 request,
                 LanguageModelCallOutcome.Failed,
                 LanguageModelFailureCategory.ProviderUnavailable,
+                responseFailureReason: null,
                 completion: null,
                 stopwatch.Elapsed,
                 providerStatusCode: null);
@@ -203,6 +221,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                 request,
                 LanguageModelCallOutcome.Failed,
                 LanguageModelFailureCategory.ProviderUnavailable,
+                responseFailureReason: null,
                 completion: null,
                 stopwatch.Elapsed,
                 providerStatusCode: null);
@@ -217,6 +236,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                 request,
                 LanguageModelCallOutcome.Failed,
                 LanguageModelFailureCategory.Unknown,
+                responseFailureReason: null,
                 completion: null,
                 stopwatch.Elapsed,
                 providerStatusCode: null);
@@ -228,6 +248,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
         LanguageModelRequest request,
         LanguageModelCallOutcome outcome,
         LanguageModelFailureCategory? failureCategory,
+        LanguageModelResponseFailureReason? responseFailureReason,
         OpenAiCompletion? completion,
         TimeSpan elapsed,
         int? providerStatusCode)
@@ -239,6 +260,7 @@ internal sealed class OpenAiLanguageModel : ILanguageModel
                 _model,
                 outcome,
                 failureCategory,
+                responseFailureReason,
                 completion?.FinishReason,
                 completion?.InputTokenCount,
                 completion?.OutputTokenCount,

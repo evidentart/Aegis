@@ -33,11 +33,18 @@ public enum LanguageModelCallOutcome
     Failed
 }
 
+public enum LanguageModelResponseFailureReason
+{
+    EmptyContent,
+    ParserRejected
+}
+
 public sealed record LanguageModelCallDiagnostics(
     LanguageModelCallPhase Phase,
     string Model,
     LanguageModelCallOutcome Outcome,
     LanguageModelFailureCategory? FailureCategory,
+    LanguageModelResponseFailureReason? ResponseFailureReason,
     string? FinishReason,
     int? InputTokenCount,
     int? OutputTokenCount,

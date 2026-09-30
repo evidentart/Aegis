@@ -1,6 +1,6 @@
 # Aegis
 
-Aegis is a Windows-native AI systems analyst for safe, read-only investigation of system behavior, reliability, and performance.
+Aegis is a Windows-native AI systems analyst for bounded, read-only investigation of system behavior, reliability, and performance.
 
 Its investigation loop is:
 
@@ -11,6 +11,10 @@ Aegis is an AI systems analyst, not a computer-control agent.
 ## Overview
 
 Aegis combines a provider-neutral investigation runtime with a small set of explicitly registered Windows observation tools. It gathers bounded observations, sends structured evidence to the configured language model, and presents an evidence-grounded report with local history and baselines.
+
+## Demo
+
+![Aegis demo](docs/images/aegis_demo.gif)
 
 ## Current capabilities
 
@@ -62,8 +66,6 @@ msbuild Aegis.sln /restore /t:Build /p:Configuration=Debug /p:Platform=x64
 dotnet test tests\Aegis.Tests\Aegis.Tests.csproj --configuration Debug
 ```
 
-The current validation baseline is 198 passing tests and a successful x64 Debug build. The NuGet vulnerability audit remains subject to feed availability; NU1900 means a complete current vulnerability audit cannot be claimed.
-
 ## Running Aegis
 
 After a successful x64 Debug build, the unpackaged executable is located at:
@@ -102,6 +104,12 @@ Investigation prompts and the evidence needed for model reasoning are sent to th
 
 Application diagnostics currently use debug output rather than a durable diagnostic log. Diagnostic fields are bounded and do not include prompts, observation payloads, provider response bodies, credentials, or database paths.
 
+## Screenshots
+
+![Investigation screen](docs/images/investigation_screen.png)
+
+![History screen](docs/images/history_screen.png)
+
 ## Investigation behavior
 
 Investigations use one initial plan and at most one replan, with a shared bounded observation budget and sequential execution. Cancellation is cooperative and propagates through the investigation and observation layers. Completed investigations, terminal outcomes, local history, and saved baselines are available in the application; Aegis does not continuously monitor the system in the background.
@@ -112,7 +120,7 @@ The repository includes deterministic tests for planning, runtime validation, pr
 
 The current release-hardening baseline is:
 
-- 198 tests passing
+- 203 tests passing
 - x64 Debug Visual Studio MSBuild succeeding
 - `git diff --check` passing
 
