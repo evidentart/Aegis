@@ -47,7 +47,10 @@ public partial class App : Application
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Aegis local history storage could not be initialized.");
+            _logger.LogError(
+                "Aegis local history storage could not be initialized. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
         }
 
         _historyService = new InvestigationHistoryService(persistenceStore);

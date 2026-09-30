@@ -52,6 +52,9 @@ public sealed class AgentRuntimeTests
         Assert.Contains("overall memory pressure or usage as high merely because individual processes have large working sets", finalSystemInstruction);
         Assert.Contains("observed aggregate memory-load metric", finalSystemInstruction);
         Assert.Contains("Keep per-process memory usage distinct from system-wide memory pressure", finalSystemInstruction);
+        Assert.Contains("leave conclusions, hypotheses, uncertainties, and recommendations empty", finalSystemInstruction);
+        Assert.Contains("recommendations only when they materially help the user", finalSystemInstruction);
+        Assert.Contains("Do not recommend commands, registry inspection, systeminfo, or additional evidence collection", finalSystemInstruction);
         Assert.DoesNotContain("\"answer\"", finalSystemInstruction);
     }
 

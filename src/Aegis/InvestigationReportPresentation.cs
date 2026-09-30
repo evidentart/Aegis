@@ -16,17 +16,38 @@ public static class InvestigationReportPresentation
     {
         ArgumentNullException.ThrowIfNull(report);
 
-        return
-        [
-            new("Summary", [new InvestigationReportItem(report.Summary, Array.Empty<string>())]),
-            new("Observed Facts", report.ObservedFacts.Select(ToItem).ToArray()),
-            new("Conclusions", report.Conclusions.Select(ToItem).ToArray()),
-            new("Hypotheses", report.Hypotheses.Select(ToItem).ToArray()),
-            new("Uncertainty", report.Uncertainties.Select(text => new InvestigationReportItem(text, Array.Empty<string>())).ToArray()),
-            new("Recommendations", report.Recommendations.Select(text => new InvestigationReportItem(text, Array.Empty<string>())).ToArray())
-        ];
+        var sections = new List<InvestigationReportSection>
+        {
+            new("Summary", [new InvestigationReportItem(report.Summary, Array.Empty<string>())])
+        };
+
+        AddSectionIfPopulated(sections, "Observed Facts", report.ObservedFacts.Select(ToItem));
+        AddSectionIfPopulated(sections, "Conclusions", report.Conclusions.Select(ToItem));
+        AddSectionIfPopulated(sections, "Hypotheses", report.Hypotheses.Select(ToItem));
+        AddSectionIfPopulated(
+            sections,
+            "Uncertainty",
+            report.Uncertainties.Select(text => new InvestigationReportItem(text, Array.Empty<string>())));
+        AddSectionIfPopulated(
+            sections,
+            "Recommendations",
+            report.Recommendations.Select(text => new InvestigationReportItem(text, Array.Empty<string>())));
+
+        return sections;
     }
 
     private static InvestigationReportItem ToItem(EvidenceStatement statement) =>
         new(statement.Text, statement.EvidenceStepIds);
+
+    private static void AddSectionIfPopulated(
+        ICollection<InvestigationReportSection> sections,
+        string heading,
+        IEnumerable<InvestigationReportItem> items)
+    {
+        var materializedItems = items.ToArray();
+        if (materializedItems.Length > 0)
+        {
+            sections.Add(new InvestigationReportSection(heading, materializedItems));
+        }
+    }
 }

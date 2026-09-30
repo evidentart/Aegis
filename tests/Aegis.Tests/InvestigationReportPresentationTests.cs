@@ -31,12 +31,33 @@ public sealed class InvestigationReportPresentationTests
     }
 
     [Fact]
-    public void KeepsEmptyReportSectionsVisibleToTheStructuredPresenter()
+    public void OmitsEmptyOptionalReportSections()
     {
         var sections = InvestigationReportPresentation.BuildSections(
             InvestigationReport.FromLegacySummary("Summary"));
 
-        Assert.Equal(6, sections.Count);
-        Assert.All(sections.Skip(1), section => Assert.Empty(section.Items));
+        var section = Assert.Single(sections);
+        Assert.Equal("Summary", section.Heading);
+        Assert.Equal("Summary", Assert.Single(section.Items).Text);
+    }
+
+    [Fact]
+    public void KeepsOnlyPopulatedOptionalSectionsInStableOrder()
+    {
+        var sections = InvestigationReportPresentation.BuildSections(
+            new InvestigationReport(
+                "Summary",
+                [new EvidenceStatement("Observed fact", ["step-1"])],
+                [],
+                [new EvidenceStatement("Hypothesis", ["step-1"])],
+                [],
+                ["Recommendation"]));
+
+        Assert.Equal(
+            ["Summary", "Observed Facts", "Hypotheses", "Recommendations"],
+            sections.Select(section => section.Heading));
+        Assert.Equal("step-1", Assert.Single(sections[1].Items).EvidenceStepIds.Single());
+        Assert.Equal("step-1", Assert.Single(sections[2].Items).EvidenceStepIds.Single());
+        Assert.Equal("Recommendation", Assert.Single(sections[3].Items).Text);
     }
 }

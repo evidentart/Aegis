@@ -11,23 +11,58 @@
     <Grid.Resources>
       <local:LocalDateTimeConverter x:Key="LocalDateTimeConverter" />
       <Style x:Key="SurfaceCardStyle" TargetType="Border">
-        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
-        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="Background" Value="{ThemeResource AegisCardBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource AegisBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="12" />
       </Style>
-      <Style x:Key="PageDescriptionTextStyle" TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+      <Style x:Key="InvestigationInputCardStyle" TargetType="Border" BasedOn="{StaticResource SurfaceCardStyle}">
+        <Setter Property="Background" Value="{ThemeResource AegisQuestionBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource AegisQuestionBorderBrush}" />
+      </Style>
+      <Style x:Key="PageDescriptionTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource AegisSecondaryTextBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
       </Style>
-      <Style x:Key="MetadataTextStyle" TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+      <Style x:Key="MetadataTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisEvidenceTextStyle}">
+      </Style>
+      <Style x:Key="ListItemMetadataTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
         <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
       </Style>
       <Style x:Key="ReportHostStyle" TargetType="Border">
-        <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}" />
+        <Setter Property="Background" Value="{ThemeResource AegisPageBackgroundBrush}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="CornerRadius" Value="0" />
+      </Style>
+      <Style x:Key="AegisPrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+        <Setter Property="Background" Value="{ThemeResource AegisAccentBrush}" />
+        <Setter Property="Foreground" Value="{ThemeResource AegisAccentForegroundBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource AegisAccentBrush}" />
+      </Style>
+      <Style x:Key="AegisListViewItemStyle" TargetType="ListViewItem">
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ListViewItem">
+              <ListViewItemPresenter x:Name="Root"
+                                     ContentTransitions="{TemplateBinding ContentTransitions}"
+                                     Control.IsTemplateFocusTarget="True"
+                                     FocusVisualMargin="{TemplateBinding FocusVisualMargin}"
+                                     SelectionCheckMarkVisualEnabled="False"
+                                     PointerOverBackground="{ThemeResource AegisSubtleSurfaceBrush}"
+                                     PointerOverForeground="{ThemeResource AegisPrimaryTextBrush}"
+                                     SelectedBackground="{ThemeResource AegisSelectedItemBrush}"
+                                     SelectedForeground="{ThemeResource AegisSelectedItemForegroundBrush}"
+                                     SelectedPointerOverBackground="{ThemeResource AegisSelectedItemHoverBrush}"
+                                     PressedBackground="{ThemeResource AegisSelectedItemPressedBrush}"
+                                     SelectedPressedBackground="{ThemeResource AegisSelectedItemPressedBrush}"
+                                     HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                     VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                     ContentMargin="{TemplateBinding Padding}" />
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
       </Style>
     </Grid.Resources>
     <NavigationView x:Name="RootNavigationView"
@@ -37,8 +72,8 @@
                     SelectionChanged="RootNavigationView_SelectionChanged">
       <NavigationView.PaneHeader>
         <StackPanel Padding="16,18,16,12" Spacing="2">
-          <TextBlock Text="Aegis" FontSize="20" FontWeight="SemiBold" />
-          <TextBlock Text="System investigation" Style="{StaticResource PageDescriptionTextStyle}" FontSize="12" />
+          <TextBlock Text="Aegis" Style="{StaticResource AegisCardHeadingTextStyle}" />
+          <TextBlock Text="System investigation" Style="{StaticResource MetadataTextStyle}" />
         </StackPanel>
       </NavigationView.PaneHeader>
       <NavigationView.MenuItems>
@@ -66,7 +101,7 @@
         </NavigationViewItem>
       </NavigationView.FooterMenuItems>
       <NavigationView.Content>
-        <Grid Padding="24" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+        <Grid Padding="24" Background="{ThemeResource AegisPageBackgroundBrush}">
           <Grid x:Name="InvestigatePage">
             <VisualStateManager.VisualStateGroups>
               <VisualStateGroup>
@@ -107,7 +142,7 @@
                     <RowDefinition Height="Auto" />
                   </Grid.RowDefinitions>
                   <StackPanel MinWidth="0" Spacing="4">
-                    <TextBlock Text="Investigate" FontSize="28" FontWeight="SemiBold" />
+                    <TextBlock Text="Investigate" Style="{StaticResource AegisPageTitleTextStyle}" />
                     <TextBlock Text="Ask a focused question about this Windows system."
                                Style="{StaticResource PageDescriptionTextStyle}" />
                   </StackPanel>
@@ -122,38 +157,60 @@
                 </Grid>
 
                 <Border Grid.Row="1"
-                        Style="{StaticResource SurfaceCardStyle}"
+                        Style="{StaticResource InvestigationInputCardStyle}"
                         HorizontalAlignment="Stretch"
                         Padding="20">
                   <StackPanel Spacing="14">
-                    <TextBlock Text="Investigation question" FontWeight="SemiBold" />
+                    <TextBlock Text="Investigation question"
+                               Style="{StaticResource AegisSectionHeadingTextStyle}"
+                               Foreground="{ThemeResource AegisQuestionForegroundBrush}" />
                     <TextBox x:Name="QuestionTextBox"
                              PlaceholderText="For example: What may explain the recent system errors?"
                              AcceptsReturn="True"
                              TextWrapping="Wrap"
-                             MinHeight="76" />
+                             MinHeight="76"
+                             FontFamily="Segoe UI Variable"
+                             FontSize="14"
+                             PointerEntered="QuestionTextBox_PointerEntered"
+                             PointerExited="QuestionTextBox_PointerExited"
+                             Background="{ThemeResource AegisQuestionBackgroundBrush}"
+                             Foreground="{ThemeResource AegisQuestionForegroundBrush}"
+                             PlaceholderForeground="{ThemeResource AegisQuestionPlaceholderBrush}"
+                             BorderBrush="{ThemeResource AegisQuestionBorderBrush}"
+                             SelectionHighlightColor="{ThemeResource AegisQuestionSelectionBrush}"
+                             FocusVisualPrimaryBrush="{ThemeResource AegisQuestionFocusBrush}"
+                             FocusVisualSecondaryBrush="{ThemeResource AegisQuestionFocusBrush}" />
                     <Grid ColumnSpacing="12">
                       <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" MinWidth="0" />
                       </Grid.ColumnDefinitions>
                       <Button x:Name="InvestigateButton"
-                              Style="{StaticResource AccentButtonStyle}"
+                              Style="{StaticResource AegisPrimaryButtonStyle}"
                               Content="Investigate"
                               Click="InvestigateButton_Click"
                               MinWidth="120" />
-                      <ProgressRing Grid.Column="1"
+                      <Button x:Name="CancelInvestigationButton"
+                              Grid.Column="1"
+                              Content="Cancel"
+                              Click="CancelInvestigationButton_Click"
+                              IsEnabled="False"
+                              MinWidth="84" />
+                      <ProgressRing Grid.Column="2"
                                     x:Name="BusyIndicator"
                                     IsActive="False"
                                     Width="24"
                                     Height="24"
+                                    Foreground="{ThemeResource AegisQuestionForegroundBrush}"
                                     VerticalAlignment="Center" />
-                      <TextBlock Grid.Column="2"
+                      <TextBlock Grid.Column="3"
                                  x:Name="StatusTextBlock"
                                  VerticalAlignment="Center"
                                  TextWrapping="Wrap"
-                                 Opacity="0.72" />
+                                 Foreground="{ThemeResource AegisQuestionForegroundBrush}"
+                                 Opacity="0.9" />
                     </Grid>
                   </StackPanel>
                 </Border>
@@ -166,8 +223,7 @@
                         Padding="0,8,0,16">
                   <StackPanel Spacing="16">
                     <TextBlock Text="Investigation result"
-                               FontSize="20"
-                               FontWeight="SemiBold"
+                               Style="{StaticResource AegisCardHeadingTextStyle}"
                                Margin="20,0" />
                     <StackPanel x:Name="InvestigationResultSectionsPanel" Spacing="16" />
                   </StackPanel>
@@ -189,7 +245,7 @@
                 <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
               <StackPanel Spacing="4">
-                <TextBlock Text="History" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="History" Style="{StaticResource AegisPageTitleTextStyle}" />
                 <TextBlock Text="Review persisted investigations and their observations." Style="{StaticResource PageDescriptionTextStyle}" />
               </StackPanel>
               <Button x:Name="ClearHistoryButton"
@@ -211,29 +267,36 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                   </Grid.RowDefinitions>
-                  <TextBlock Text="Investigations" FontWeight="SemiBold" />
+                  <TextBlock Text="Investigations" Style="{StaticResource AegisSectionHeadingTextStyle}" />
                   <ListView Grid.Row="1"
                             x:Name="HistoryListView"
                             SelectionChanged="HistoryListView_SelectionChanged"
+                            ItemContainerStyle="{StaticResource AegisListViewItemStyle}"
                             BorderThickness="0">
                     <ListView.ItemTemplate>
                       <DataTemplate>
-                        <Grid Padding="8,9" RowSpacing="4">
-                          <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                          </Grid.RowDefinitions>
-                          <TextBlock Text="{Binding Question}"
-                                     FontSize="14"
-                                     TextWrapping="Wrap"
-                                     TextTrimming="CharacterEllipsis"
-                                     MaxLines="2" />
-                          <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="{Binding LifecycleStatus}" Style="{StaticResource MetadataTextStyle}" />
-                            <TextBlock Text="•" Style="{StaticResource MetadataTextStyle}" Opacity="0.72" />
-                            <TextBlock Text="{Binding CreatedAtUtc, Converter={StaticResource LocalDateTimeConverter}}"
-                                       Style="{StaticResource MetadataTextStyle}" />
-                          </StackPanel>
+                        <Grid>
+                          <Grid Padding="8,9" RowSpacing="4">
+                            <Grid.RowDefinitions>
+                              <RowDefinition Height="Auto" />
+                              <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="{Binding Question}"
+                                       FontSize="14"
+                                       TextWrapping="Wrap"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxLines="2" />
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                              <TextBlock Text="{Binding LifecycleStatus}" Style="{StaticResource ListItemMetadataTextStyle}" />
+                              <TextBlock Text="•" Style="{StaticResource ListItemMetadataTextStyle}" Opacity="0.72" />
+                              <TextBlock Text="{Binding CreatedAtUtc, Converter={StaticResource LocalDateTimeConverter}}"
+                                         Style="{StaticResource ListItemMetadataTextStyle}" />
+                            </StackPanel>
+                          </Grid>
+                          <Border BorderBrush="{ThemeResource AegisBorderBrush}"
+                                  BorderThickness="0,0,0,1"
+                                  Opacity="0.4"
+                                  VerticalAlignment="Bottom" />
                         </Grid>
                       </DataTemplate>
                     </ListView.ItemTemplate>
@@ -250,8 +313,7 @@
                                Style="{StaticResource PageDescriptionTextStyle}"
                                TextWrapping="Wrap" />
                     <TextBlock x:Name="HistoryDetailQuestionTextBlock"
-                               FontSize="18"
-                               FontWeight="SemiBold"
+                               Style="{StaticResource AegisCardHeadingTextStyle}"
                                TextWrapping="Wrap"
                                Visibility="Collapsed" />
                     <TextBlock x:Name="HistoryDetailMetadataTextBlock"
@@ -267,14 +329,15 @@
                                Style="{StaticResource MetadataTextStyle}"
                                TextWrapping="Wrap" />
                     <StackPanel x:Name="HistoryResultSectionsPanel" Spacing="16" />
-                    <TextBlock Text="Plan history" FontWeight="SemiBold" Visibility="Collapsed" x:Name="HistoryPlansHeadingTextBlock" />
+                    <TextBlock Text="Plan history" Style="{StaticResource AegisSectionHeadingTextStyle}" Visibility="Collapsed" x:Name="HistoryPlansHeadingTextBlock" />
                     <TextBlock x:Name="HistoryPlansTextBlock"
                                Style="{StaticResource MetadataTextStyle}"
                                TextWrapping="Wrap" />
-                    <TextBlock Text="Observation executions" FontWeight="SemiBold" />
+                    <TextBlock Text="Observation executions" Style="{StaticResource AegisSectionHeadingTextStyle}" />
                     <ListView x:Name="ObservationListView"
                               SelectionChanged="ObservationListView_SelectionChanged"
                               MaxHeight="180"
+                              ItemContainerStyle="{StaticResource AegisListViewItemStyle}"
                               BorderThickness="0">
                       <ListView.ItemTemplate>
                         <DataTemplate>
@@ -284,13 +347,11 @@
                               <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <TextBlock Text="{Binding ToolId}"
-                                       FontSize="13"
                                        TextWrapping="Wrap" />
                             <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
-                              <TextBlock Text="{Binding Status}" Style="{StaticResource MetadataTextStyle}" />
+                              <TextBlock Text="{Binding Status}" Style="{StaticResource ListItemMetadataTextStyle}" />
                               <TextBlock Text="{Binding EligibilityText}"
-                                         Style="{StaticResource MetadataTextStyle}"
-                                         Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
+                                         Style="{StaticResource ListItemMetadataTextStyle}" />
                             </StackPanel>
                           </Grid>
                         </DataTemplate>
@@ -321,7 +382,7 @@
               <RowDefinition Height="*" />
             </Grid.RowDefinitions>
             <StackPanel Spacing="4">
-              <TextBlock Text="Baselines" FontSize="28" FontWeight="SemiBold" />
+              <TextBlock Text="Baselines" Style="{StaticResource AegisPageTitleTextStyle}" />
               <TextBlock Text="Review approved system-information baselines created from completed investigations."
                          Style="{StaticResource PageDescriptionTextStyle}" />
             </StackPanel>
@@ -336,11 +397,12 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                   </Grid.RowDefinitions>
-                  <TextBlock Text="Saved baselines" FontWeight="SemiBold" />
+                  <TextBlock Text="Saved baselines" Style="{StaticResource AegisSectionHeadingTextStyle}" />
                   <Grid Grid.Row="1">
                     <ListView x:Name="BaselineListView"
                               DisplayMemberPath="DisplayText"
                               SelectionChanged="BaselineListView_SelectionChanged"
+                              ItemContainerStyle="{StaticResource AegisListViewItemStyle}"
                               BorderThickness="0" />
                     <StackPanel x:Name="BaselineEmptyStatePanel"
                                 HorizontalAlignment="Center"
@@ -349,7 +411,7 @@
                                 Spacing="6"
                                 IsHitTestVisible="False">
                       <TextBlock Text="No saved baselines yet."
-                                 FontWeight="SemiBold"
+                                 Style="{StaticResource AegisSectionHeadingTextStyle}"
                                  HorizontalAlignment="Center"
                                  TextAlignment="Center" />
                       <TextBlock Text="Create one from an eligible system-information observation in History."
@@ -363,7 +425,7 @@
               </Border>
               <Border Grid.Column="1" Style="{StaticResource SurfaceCardStyle}" Padding="20">
                 <StackPanel Spacing="12">
-                  <TextBlock Text="Baseline details" FontSize="20" FontWeight="SemiBold" />
+                  <TextBlock Text="Baseline details" Style="{StaticResource AegisCardHeadingTextStyle}" />
                   <TextBlock x:Name="BaselineEmptyDetailTextBlock"
                              Text="Select a baseline to view its recorded platform details."
                              Style="{StaticResource PageDescriptionTextStyle}"
@@ -386,17 +448,16 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto">
               <StackPanel MaxWidth="760" HorizontalAlignment="Left" Spacing="16">
                 <StackPanel Spacing="6">
-                  <TextBlock Text="Settings" FontSize="28" FontWeight="SemiBold" />
+                  <TextBlock Text="Settings" Style="{StaticResource AegisPageTitleTextStyle}" />
                   <TextBlock Text="Aegis keeps configuration intentionally minimal."
                              Style="{StaticResource PageDescriptionTextStyle}" />
                 </StackPanel>
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="20">
                   <StackPanel Spacing="10">
-                    <TextBlock Text="Aegis" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Aegis" Style="{StaticResource AegisCardHeadingTextStyle}" />
                     <TextBlock x:Name="SettingsVersionTextBlock" Style="{StaticResource MetadataTextStyle}" />
                     <TextBlock Text="Read-only Windows investigation"
-                               FontSize="15"
-                               FontWeight="SemiBold"
+                               Style="{StaticResource AegisLeadTextStyle}"
                                Margin="0,6,0,0" />
                     <TextBlock Text="A calm workspace for observing narrowly scoped Windows information and understanding the evidence without changing the system."
                                Style="{StaticResource PageDescriptionTextStyle}" />
@@ -407,12 +468,12 @@
                 </Border>
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="20">
                   <StackPanel Spacing="10">
-                    <TextBlock Text="AI configuration" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="AI configuration" Style="{StaticResource AegisCardHeadingTextStyle}" />
                     <TextBlock Text="Live OpenAI configuration uses the existing process-scoped environment variables below."
                                Style="{StaticResource PageDescriptionTextStyle}" />
                     <StackPanel Spacing="4" Margin="0,4,0,0">
-                      <TextBlock Text="AEGIS_OPENAI_API_KEY" FontFamily="Consolas" FontSize="13" Opacity="0.78" />
-                      <TextBlock Text="AEGIS_OPENAI_MODEL" FontFamily="Consolas" FontSize="13" Opacity="0.78" />
+                      <TextBlock Text="AEGIS_OPENAI_API_KEY" FontFamily="Consolas" FontSize="13" LineHeight="18" Opacity="0.78" />
+                      <TextBlock Text="AEGIS_OPENAI_MODEL" FontFamily="Consolas" FontSize="13" LineHeight="18" Opacity="0.78" />
                     </StackPanel>
                     <TextBlock Text="Credentials are not displayed, stored, or edited here."
                                Style="{StaticResource MetadataTextStyle}" />
@@ -420,7 +481,7 @@
                 </Border>
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="20">
                   <StackPanel Spacing="10">
-                    <TextBlock Text="Data management" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="Data management" Style="{StaticResource AegisCardHeadingTextStyle}" />
                     <TextBlock Text="Remove saved Aegis history and baselines while preserving investigations that are still being created or run."
                                Style="{StaticResource PageDescriptionTextStyle}"
                                TextWrapping="Wrap" />

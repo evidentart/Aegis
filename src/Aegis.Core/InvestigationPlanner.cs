@@ -209,6 +209,9 @@ internal static class InvestigationModelContext
         Factual claims, conclusions, and hypotheses must cite relevant successful evidence only.
         State missing evidence and uncertainty when they materially affect the answer.
         Keep straightforward answers concise; do not force a fixed heading format.
+        For a straightforward factual objective, answer directly and leave conclusions, hypotheses, uncertainties, and recommendations empty when they do not materially improve the answer.
+        Use conclusions only when interpretation beyond the observed facts is needed, hypotheses only when a supported hypothesis is needed, uncertainties only for material limitations, and recommendations only when they materially help the user.
+        Do not recommend commands, registry inspection, systeminfo, or additional evidence collection merely to pad an adequately answered factual question; recommend a follow-up only for a concrete unresolved limitation.
         A single performance snapshot cannot prove sustained behavior, root cause, or causation.
         A top-process observation represents the top accessible observed processes; inaccessible or exited processes may be absent.
         Recent Windows event metadata may help correlate crash, failure, or restart investigations.

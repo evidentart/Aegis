@@ -4,6 +4,108 @@
       <ResourceDictionary.MergedDictionaries>
         <controls:XamlControlsResources />
       </ResourceDictionary.MergedDictionaries>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="AegisPageBackgroundBrush" Color="#F7F9FC" />
+          <SolidColorBrush x:Key="AegisCardBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="AegisSubtleSurfaceBrush" Color="#EEF3F9" />
+          <SolidColorBrush x:Key="AegisBorderBrush" Color="#D8E2EE" />
+          <SolidColorBrush x:Key="AegisAccentBrush" Color="#2563EB" />
+          <SolidColorBrush x:Key="AegisAccentForegroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="AegisPrimaryTextBrush" Color="#172033" />
+          <SolidColorBrush x:Key="AegisSecondaryTextBrush" Color="#526176" />
+          <SolidColorBrush x:Key="AegisTertiaryTextBrush" Color="#6B7A90" />
+          <SolidColorBrush x:Key="AegisQuestionBackgroundBrush" Color="#1D4ED8" />
+          <SolidColorBrush x:Key="AegisQuestionHoverBrush" Color="#2563EB" />
+          <SolidColorBrush x:Key="AegisQuestionBorderBrush" Color="#60A5FA" />
+          <SolidColorBrush x:Key="AegisQuestionForegroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="AegisQuestionPlaceholderBrush" Color="#DCEBFF" />
+          <SolidColorBrush x:Key="AegisQuestionSelectionBrush" Color="#93C5FD" />
+          <SolidColorBrush x:Key="AegisQuestionFocusBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="AegisSelectedItemBrush" Color="#2563EB" />
+          <SolidColorBrush x:Key="AegisSelectedItemHoverBrush" Color="#1D4ED8" />
+          <SolidColorBrush x:Key="AegisSelectedItemPressedBrush" Color="#1E40AF" />
+          <SolidColorBrush x:Key="AegisSelectedItemForegroundBrush" Color="#FFFFFF" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="AegisPageBackgroundBrush" Color="#151922" />
+          <SolidColorBrush x:Key="AegisCardBackgroundBrush" Color="#202633" />
+          <SolidColorBrush x:Key="AegisSubtleSurfaceBrush" Color="#263142" />
+          <SolidColorBrush x:Key="AegisBorderBrush" Color="#3A4658" />
+          <SolidColorBrush x:Key="AegisAccentBrush" Color="#5B8DEF" />
+          <SolidColorBrush x:Key="AegisAccentForegroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="AegisPrimaryTextBrush" Color="#F3F6FC" />
+          <SolidColorBrush x:Key="AegisSecondaryTextBrush" Color="#B7C0CF" />
+          <SolidColorBrush x:Key="AegisTertiaryTextBrush" Color="#98A5B8" />
+          <SolidColorBrush x:Key="AegisQuestionBackgroundBrush" Color="#244F9A" />
+          <SolidColorBrush x:Key="AegisQuestionHoverBrush" Color="#2F62B9" />
+          <SolidColorBrush x:Key="AegisQuestionBorderBrush" Color="#8AB4FF" />
+          <SolidColorBrush x:Key="AegisQuestionForegroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="AegisQuestionPlaceholderBrush" Color="#D5E3FF" />
+          <SolidColorBrush x:Key="AegisQuestionSelectionBrush" Color="#8AB4FF" />
+          <SolidColorBrush x:Key="AegisQuestionFocusBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="AegisSelectedItemBrush" Color="#3B6FC8" />
+          <SolidColorBrush x:Key="AegisSelectedItemHoverBrush" Color="#4D82E0" />
+          <SolidColorBrush x:Key="AegisSelectedItemPressedBrush" Color="#2F5DA9" />
+          <SolidColorBrush x:Key="AegisSelectedItemForegroundBrush" Color="#FFFFFF" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+          <SolidColorBrush x:Key="AegisPageBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+          <SolidColorBrush x:Key="AegisCardBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+          <SolidColorBrush x:Key="AegisSubtleSurfaceBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
+          <SolidColorBrush x:Key="AegisBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+          <SolidColorBrush x:Key="AegisAccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+          <SolidColorBrush x:Key="AegisAccentForegroundBrush" Color="{ThemeResource SystemColorHighlightTextColor}" />
+          <SolidColorBrush x:Key="AegisPrimaryTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+          <SolidColorBrush x:Key="AegisSecondaryTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+          <SolidColorBrush x:Key="AegisTertiaryTextBrush" Color="{ThemeResource SystemColorGrayTextColor}" />
+          <SolidColorBrush x:Key="AegisQuestionBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+          <SolidColorBrush x:Key="AegisQuestionHoverBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
+          <SolidColorBrush x:Key="AegisQuestionBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+          <SolidColorBrush x:Key="AegisQuestionForegroundBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+          <SolidColorBrush x:Key="AegisQuestionPlaceholderBrush" Color="{ThemeResource SystemColorGrayTextColor}" />
+          <SolidColorBrush x:Key="AegisQuestionSelectionBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+          <SolidColorBrush x:Key="AegisQuestionFocusBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+          <SolidColorBrush x:Key="AegisSelectedItemBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+          <SolidColorBrush x:Key="AegisSelectedItemHoverBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+          <SolidColorBrush x:Key="AegisSelectedItemPressedBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+          <SolidColorBrush x:Key="AegisSelectedItemForegroundBrush" Color="{ThemeResource SystemColorHighlightTextColor}" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+      <Style x:Key="AegisBodyTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="Segoe UI Variable" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="LineHeight" Value="22" />
+      </Style>
+      <Style x:Key="AegisSecondaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="Foreground" Value="{ThemeResource AegisSecondaryTextBrush}" />
+      </Style>
+      <Style x:Key="AegisEvidenceTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisSecondaryTextStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource AegisTertiaryTextBrush}" />
+      </Style>
+      <Style x:Key="AegisPageTitleTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="FontSize" Value="28" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="34" />
+      </Style>
+      <Style x:Key="AegisCardHeadingTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="24" />
+      </Style>
+      <Style x:Key="AegisSectionHeadingTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="22" />
+      </Style>
+      <Style x:Key="AegisLeadTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+      </Style>
+      <Style TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}" />
     </ResourceDictionary>
   </Application.Resources>
 </Application>

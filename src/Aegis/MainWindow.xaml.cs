@@ -5,6 +5,7 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using WinRT.Interop;
@@ -18,6 +19,7 @@ public sealed partial class MainWindow : Window
     private readonly InvestigationHistoryService _historyService;
     private readonly BaselineService _baselineService;
     private InvestigationDetails? _selectedInvestigation;
+    private CancellationTokenSource? _activeInvestigationCancellation;
 
     private sealed record ObservationExecutionListItem(
         InvestigationStepExecution Execution,
@@ -89,6 +91,11 @@ public sealed partial class MainWindow : Window
 
     private void NewInvestigationButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_activeInvestigationCancellation is not null)
+        {
+            return;
+        }
+
         QuestionTextBox.Text = string.Empty;
         StatusTextBlock.Text = string.Empty;
         ResultCard.Visibility = Visibility.Collapsed;
@@ -99,15 +106,27 @@ public sealed partial class MainWindow : Window
 
     private async void InvestigateButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_activeInvestigationCancellation is not null)
+        {
+            return;
+        }
+
+        var investigationCancellation = new CancellationTokenSource();
+        _activeInvestigationCancellation = investigationCancellation;
         InvestigateButton.IsEnabled = false;
         NewInvestigationButton.IsEnabled = false;
+        QuestionTextBox.IsEnabled = false;
+        CancelInvestigationButton.IsEnabled = true;
+        CancelInvestigationButton.Content = "Cancel";
         BusyIndicator.IsActive = true;
         StatusTextBlock.Text = "Investigating…";
         ResultCard.Visibility = Visibility.Collapsed;
 
         try
         {
-            var response = await _investigationService.InvestigateAsync(QuestionTextBox.Text);
+            var response = await _investigationService.InvestigateAsync(
+                QuestionTextBox.Text,
+                investigationCancellation.Token);
             RenderReport(InvestigationResultSectionsPanel, response.Report);
             ResultCard.Visibility = Visibility.Visible;
             StatusTextBlock.Text = $"Investigation {response.InvestigationId} completed.";
@@ -168,10 +187,51 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            if (ReferenceEquals(_activeInvestigationCancellation, investigationCancellation))
+            {
+                _activeInvestigationCancellation = null;
+            }
+
+            investigationCancellation.Dispose();
             BusyIndicator.IsActive = false;
             InvestigateButton.IsEnabled = true;
             NewInvestigationButton.IsEnabled = true;
+            QuestionTextBox.IsEnabled = true;
+            CancelInvestigationButton.IsEnabled = false;
+            CancelInvestigationButton.Content = "Cancel";
             await RefreshHistoryAsync();
+        }
+    }
+
+    private void CancelInvestigationButton_Click(object sender, RoutedEventArgs e)
+    {
+        var cancellation = _activeInvestigationCancellation;
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        CancelInvestigationButton.IsEnabled = false;
+        CancelInvestigationButton.Content = "Cancelling…";
+        StatusTextBlock.Text = "Cancelling…";
+        cancellation.Cancel();
+    }
+
+    private void QuestionTextBox_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        SetQuestionTextBoxBackground("AegisQuestionHoverBrush");
+    }
+
+    private void QuestionTextBox_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        SetQuestionTextBoxBackground("AegisQuestionBackgroundBrush");
+    }
+
+    private void SetQuestionTextBoxBackground(string resourceKey)
+    {
+        if (QuestionTextBox.IsEnabled && GetBrush(resourceKey) is { } brush)
+        {
+            QuestionTextBox.Background = brush;
         }
     }
 
@@ -222,7 +282,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Investigation deletion failed.");
+            _logger.LogError(
+                "Investigation deletion failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             var refreshed = await RefreshHistoryAsync();
             HistoryActionStatusTextBlock.Text = refreshed
                 ? "Investigation deletion failed. History was refreshed from persistence."
@@ -261,7 +324,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Clear history failed.");
+            _logger.LogError(
+                "Clear history failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             var refreshed = await RefreshHistoryAsync();
             HistoryActionStatusTextBlock.Text = refreshed
                 ? "Clear history failed. History was refreshed from persistence."
@@ -332,7 +398,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Investigation history could not be loaded.");
+            _logger.LogError(
+                "Investigation history could not be loaded. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             ClearHistoryDetails();
             HistoryEmptyDetailTextBlock.Text = "Investigation details are unavailable.";
         }
@@ -480,7 +549,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Baseline deletion failed.");
+            _logger.LogError(
+                "Baseline deletion failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             var refreshed = await RefreshHistoryAsync();
             BaselineActionStatusTextBlock.Text = refreshed
                 ? "Baseline deletion failed. Saved data was refreshed from persistence."
@@ -512,7 +584,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogWarning(exception, "Baseline creation failed.");
+            _logger.LogWarning(
+                "Baseline creation failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             BaselineStatusTextBlock.Text = "The selected observation is not eligible for a baseline.";
         }
     }
@@ -546,7 +621,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Saved history and baseline cleanup failed.");
+            _logger.LogError(
+                "Saved history and baseline cleanup failed. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             var refreshed = await RefreshHistoryAsync();
             SavedDataStatusTextBlock.Text = refreshed
                 ? "Saved-data cleanup failed. Current saved data was refreshed from persistence."
@@ -570,7 +648,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "History could not be loaded.");
+            _logger.LogError(
+                "History could not be loaded. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             HistoryEmptyDetailTextBlock.Text = "History is unavailable right now.";
             return false;
         }
@@ -605,7 +686,10 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _logger.LogError(exception, "Baselines could not be loaded.");
+            _logger.LogError(
+                "Baselines could not be loaded. ExceptionType={ExceptionType} InnerExceptionType={InnerExceptionType}.",
+                exception.GetType().Name,
+                exception.InnerException?.GetType().Name ?? "none");
             BaselineEmptyStatePanel.Visibility = Visibility.Visible;
             BaselineEmptyDetailTextBlock.Text = "Baselines are unavailable right now.";
             return false;
@@ -628,49 +712,35 @@ public sealed partial class MainWindow : Window
             sectionPanel.Children.Add(new TextBlock
             {
                 Text = section.Heading,
-                FontSize = 16,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = GetBrush("AccentTextFillColorPrimaryBrush")
+                Style = GetStyle("AegisSectionHeadingTextStyle"),
+                Foreground = GetBrush("AegisAccentBrush", "AccentTextFillColorPrimaryBrush")
             });
 
-            if (section.Items.Count == 0)
+            foreach (var item in section.Items)
             {
-                sectionPanel.Children.Add(new TextBlock
+                var itemPanel = new StackPanel
                 {
-                    Text = "None recorded.",
-                    Foreground = GetBrush("TextFillColorSecondaryBrush")
+                    Spacing = 8,
+                    Margin = new Thickness(0, 0, 0, 8)
+                };
+                itemPanel.Children.Add(new TextBlock
+                {
+                    Text = item.Text,
+                    Style = GetStyle("AegisBodyTextStyle"),
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = GetBrush("AegisPrimaryTextBrush", "TextFillColorPrimaryBrush")
                 });
-            }
-            else
-            {
-                foreach (var item in section.Items)
+                if (item.EvidenceStepIds.Count > 0)
                 {
-                    var itemPanel = new StackPanel
-                    {
-                        Spacing = 8,
-                        Margin = new Thickness(0, 0, 0, 8)
-                    };
                     itemPanel.Children.Add(new TextBlock
                     {
-                        Text = item.Text,
+                        Text = $"Evidence: {string.Join(", ", item.EvidenceStepIds.Select(PresentationFormatting.FormatEvidenceStepId))}",
+                        Style = GetStyle("AegisEvidenceTextStyle"),
                         TextWrapping = TextWrapping.Wrap,
-                        FontSize = 14,
-                        LineHeight = 22,
-                        Foreground = GetBrush("TextFillColorPrimaryBrush")
                     });
-                    if (item.EvidenceStepIds.Count > 0)
-                    {
-                        itemPanel.Children.Add(new TextBlock
-                        {
-                            Text = $"Evidence: {string.Join(", ", item.EvidenceStepIds.Select(PresentationFormatting.FormatEvidenceStepId))}",
-                            TextWrapping = TextWrapping.Wrap,
-                            FontSize = 12,
-                            Foreground = GetBrush("TextFillColorTertiaryBrush")
-                        });
-                    }
-
-                    sectionPanel.Children.Add(itemPanel);
                 }
+
+                sectionPanel.Children.Add(itemPanel);
             }
 
             target.Children.Add(new Border
@@ -697,24 +767,40 @@ public sealed partial class MainWindow : Window
             Child = new TextBlock
             {
                 Text = message,
+                Style = GetStyle("AegisBodyTextStyle"),
                 TextWrapping = TextWrapping.Wrap,
-                LineHeight = 22,
-                Foreground = GetBrush("TextFillColorSecondaryBrush")
+                Foreground = GetBrush("AegisSecondaryTextBrush", "TextFillColorSecondaryBrush")
             }
         });
     }
 
-    private static Brush? GetCardBrush() => GetBrush("CardBackgroundFillColorDefaultBrush");
+    private static Brush? GetCardBrush() =>
+        GetBrush("AegisCardBackgroundBrush", "CardBackgroundFillColorDefaultBrush");
+
+    private static Style? GetStyle(string key) =>
+        Application.Current.Resources.ContainsKey(key)
+            ? Application.Current.Resources[key] as Style
+            : null;
 
     private static Brush? GetSectionBrush() =>
-        GetBrush("LayerFillColorDefaultBrush") ?? GetCardBrush();
+        GetBrush("AegisSubtleSurfaceBrush", "LayerFillColorDefaultBrush") ?? GetCardBrush();
 
-    private static Brush? GetCardStrokeBrush() => GetBrush("CardStrokeColorDefaultBrush");
+    private static Brush? GetCardStrokeBrush() =>
+        GetBrush("AegisBorderBrush", "CardStrokeColorDefaultBrush");
 
-    private static Brush? GetBrush(string key) =>
-        Application.Current.Resources.ContainsKey(key)
-            ? Application.Current.Resources[key] as Brush
-            : null;
+    private static Brush? GetBrush(params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (Application.Current.Resources.ContainsKey(key) &&
+                Application.Current.Resources[key] is Brush brush)
+            {
+                return brush;
+            }
+        }
+
+        return null;
+    }
 
     private static string FormatObservation(ObservationResult result) => result.Data switch
     {
