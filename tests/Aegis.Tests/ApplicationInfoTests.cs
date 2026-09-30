@@ -10,7 +10,7 @@ public sealed class ApplicationInfoTests
     public void ApplicationMetadataIsDefined()
     {
         Assert.Equal("Aegis", ApplicationInfo.Name);
-        Assert.Equal("0.10.0", ApplicationInfo.Version);
+        Assert.Equal("1.0.0", ApplicationInfo.Version);
     }
 
     [Fact]

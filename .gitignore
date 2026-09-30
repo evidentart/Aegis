@@ -23,3 +23,16 @@ packages/
 ## OS files
 .DS_Store
 Thumbs.db
+
+## Aegis local editor and review files
+/.vscode/
+/AGENTS.md
+/aegis-v012-diagnostics-review.diff
+
+## Aegis local runtime artifacts
+/*.db
+/*.sqlite
+/*.sqlite3
+/*.log
+/*.dmp
+/*.mdmp
