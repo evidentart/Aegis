@@ -104,11 +104,9 @@ Investigation prompts and the evidence needed for model reasoning are sent to th
 
 Application diagnostics currently use debug output rather than a durable diagnostic log. Diagnostic fields are bounded and do not include prompts, observation payloads, provider response bodies, credentials, or database paths.
 
-## Screenshots
 
 ![Investigation screen](docs/images/investigation_screen.png)
 
-![History screen](docs/images/history_screen.png)
 
 ## Investigation behavior
 
