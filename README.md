@@ -6,7 +6,6 @@ Aegis is a native Windows application for investigating system performance, reli
 
 *Aegis investigation workspace — Spectrum Light.*
 
-*The screenshots show the application with illustrative investigation data; the displayed findings are fictional.*
 
 ## What Aegis does
 
