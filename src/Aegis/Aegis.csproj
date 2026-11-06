@@ -14,6 +14,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
+    <Content Include="Assets\SpectrumHero.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\SpectrumSidebar.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\SpectrumBackground.png" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\Aegis.Core\Aegis.Core.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250401001" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />

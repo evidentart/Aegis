@@ -7,6 +7,21 @@ namespace Aegis.Tests;
 public sealed class InvestigationReportPresentationTests
 {
     [Fact]
+    public void PreservesLongReportTextAndEvidenceReferences()
+    {
+        var longText = new string('a', 4000);
+        var report = new InvestigationReport(longText,
+            [new EvidenceStatement(longText, ["step-1"])], [], [], ["Limitations"], ["Recommendation"]);
+
+        var sections = InvestigationReportPresentation.BuildSections(report);
+        Assert.Equal(longText, sections[0].Items[0].Text);
+        Assert.Equal(longText, sections[1].Items[0].Text);
+        Assert.Equal("step-1", Assert.Single(sections[1].Items[0].EvidenceStepIds));
+        Assert.Contains(sections, section => section.Heading == "Uncertainty");
+        Assert.Contains(sections, section => section.Heading == "Recommendations");
+    }
+
+    [Fact]
     public void BuildsStructuredSectionsWithoutDroppingEvidenceReferences()
     {
         var report = new InvestigationReport(

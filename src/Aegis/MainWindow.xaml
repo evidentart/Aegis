@@ -7,24 +7,37 @@
   <Window.SystemBackdrop>
     <MicaBackdrop />
   </Window.SystemBackdrop>
-  <Grid>
+  <Grid x:Name="RootLayout">
     <Grid.Resources>
       <local:LocalDateTimeConverter x:Key="LocalDateTimeConverter" />
       <Style x:Key="SurfaceCardStyle" TargetType="Border">
         <Setter Property="Background" Value="{ThemeResource AegisCardBackgroundBrush}" />
         <Setter Property="BorderBrush" Value="{ThemeResource AegisBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="12" />
-      </Style>
-      <Style x:Key="InvestigationInputCardStyle" TargetType="Border" BasedOn="{StaticResource SurfaceCardStyle}">
-        <Setter Property="Background" Value="{ThemeResource AegisQuestionBackgroundBrush}" />
-        <Setter Property="BorderBrush" Value="{ThemeResource AegisQuestionBorderBrush}" />
+        <Setter Property="CornerRadius" Value="18" />
       </Style>
       <Style x:Key="PageDescriptionTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
         <Setter Property="Foreground" Value="{ThemeResource AegisSecondaryTextBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
       </Style>
       <Style x:Key="MetadataTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisEvidenceTextStyle}">
+      </Style>
+      <Style x:Key="SpectrumQuickTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+      </Style>
+      <Style x:Key="SpectrumQuickDescriptionStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LineHeight" Value="19" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+      </Style>
+      <Style x:Key="SpectrumQuickIconBadgeStyle" TargetType="Border">
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="Background" Value="{ThemeResource SpectrumQuickIconSurface}" />
       </Style>
       <Style x:Key="ListItemMetadataTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
         <Setter Property="FontSize" Value="12" />
@@ -34,11 +47,6 @@
         <Setter Property="Background" Value="{ThemeResource AegisPageBackgroundBrush}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="CornerRadius" Value="0" />
-      </Style>
-      <Style x:Key="AegisPrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
-        <Setter Property="Background" Value="{ThemeResource AegisAccentBrush}" />
-        <Setter Property="Foreground" Value="{ThemeResource AegisAccentForegroundBrush}" />
-        <Setter Property="BorderBrush" Value="{ThemeResource AegisAccentBrush}" />
       </Style>
       <Style x:Key="AegisListViewItemStyle" TargetType="ListViewItem">
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -68,171 +76,204 @@
     <NavigationView x:Name="RootNavigationView"
                     IsSettingsVisible="False"
                     IsBackButtonVisible="Collapsed"
+                    OpenPaneLength="264"
                     PaneDisplayMode="Auto"
                     SelectionChanged="RootNavigationView_SelectionChanged">
+      <NavigationView.Resources>
+        <ResourceDictionary Source="Themes/SpectrumNavigation.xaml" />
+      </NavigationView.Resources>
       <NavigationView.PaneHeader>
-        <StackPanel Padding="16,18,16,12" Spacing="2">
-          <TextBlock Text="Aegis" Style="{StaticResource AegisCardHeadingTextStyle}" />
-          <TextBlock Text="System investigation" Style="{StaticResource MetadataTextStyle}" />
+        <StackPanel Orientation="Horizontal" Padding="16,22,12,20" Spacing="12">
+          <Grid Width="30" Height="36" AutomationProperties.AccessibilityView="Raw">
+            <Path Data="M 15,2 L 27,6 L 27,17 C 27,25 22,30 15,34 C 8,30 3,25 3,17 L 3,6 Z"
+                  Stroke="{ThemeResource SpectrumNavigationTextBrush}" StrokeThickness="2.5" />
+            <Path Data="M 9,17 L 13,21 L 21,12" Stroke="{ThemeResource SpectrumNavigationTextBrush}"
+                  StrokeThickness="2.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+          </Grid>
+          <StackPanel Spacing="2">
+            <TextBlock Text="Aegis" FontSize="22" FontWeight="SemiBold" Foreground="{ThemeResource SpectrumNavigationTextBrush}" />
+            <TextBlock Text="System investigation" FontSize="12" Foreground="{ThemeResource SpectrumNavigationSubtitleBrush}" />
+          </StackPanel>
         </StackPanel>
       </NavigationView.PaneHeader>
       <NavigationView.MenuItems>
-        <NavigationViewItem x:Name="InvestigateNavigationItem" Content="Investigate" Tag="Investigate">
+        <NavigationViewItem x:Name="InvestigateNavigationItem" Content="Investigate" Tag="Investigate" CornerRadius="14" MinHeight="52" FontSize="16">
           <NavigationViewItem.Icon>
-            <SymbolIcon Symbol="Find" />
+            <FontIcon Glyph="&#xE721;" FontSize="22" />
           </NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem x:Name="HistoryNavigationItem" Content="History" Tag="History">
+        <NavigationViewItem x:Name="HistoryNavigationItem" Content="History" Tag="History" CornerRadius="14" MinHeight="52" FontSize="16">
           <NavigationViewItem.Icon>
-            <SymbolIcon Symbol="Clock" />
+            <FontIcon Glyph="&#xE823;" FontSize="22" />
           </NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem x:Name="BaselinesNavigationItem" Content="Baselines" Tag="Baselines">
+        <NavigationViewItem x:Name="BaselinesNavigationItem" Content="Baselines" Tag="Baselines" CornerRadius="14" MinHeight="52" FontSize="16">
           <NavigationViewItem.Icon>
-            <SymbolIcon Symbol="Library" />
+            <FontIcon Glyph="&#xE8F1;" FontSize="22" />
           </NavigationViewItem.Icon>
         </NavigationViewItem>
       </NavigationView.MenuItems>
       <NavigationView.FooterMenuItems>
-        <NavigationViewItem x:Name="SettingsNavigationItem" Content="Settings" Tag="Settings">
+        <NavigationViewItem x:Name="SettingsNavigationItem" Content="Settings" Tag="Settings" CornerRadius="14" MinHeight="52" FontSize="16">
           <NavigationViewItem.Icon>
-            <SymbolIcon Symbol="Setting" />
+            <FontIcon Glyph="&#xE713;" FontSize="22" />
           </NavigationViewItem.Icon>
         </NavigationViewItem>
       </NavigationView.FooterMenuItems>
       <NavigationView.Content>
-        <Grid Padding="24" Background="{ThemeResource AegisPageBackgroundBrush}">
-          <Grid x:Name="InvestigatePage">
-            <VisualStateManager.VisualStateGroups>
-              <VisualStateGroup>
-                <VisualState x:Name="WideInvestigateHeader">
-                  <VisualState.StateTriggers>
-                    <AdaptiveTrigger MinWindowWidth="1200" />
-                  </VisualState.StateTriggers>
-                  <VisualState.Setters>
-                    <Setter Target="NewInvestigationButton.(Grid.Row)" Value="0" />
-                    <Setter Target="NewInvestigationButton.(Grid.Column)" Value="1" />
-                    <Setter Target="NewInvestigationButton.(Grid.ColumnSpan)" Value="1" />
-                  </VisualState.Setters>
-                </VisualState>
-              </VisualStateGroup>
-            </VisualStateManager.VisualStateGroups>
-            <ScrollViewer HorizontalContentAlignment="Stretch"
-                          HorizontalScrollBarVisibility="Disabled"
-                          VerticalScrollBarVisibility="Auto">
-              <Grid HorizontalAlignment="Stretch">
-                <Grid MaxWidth="880"
-                      HorizontalAlignment="Stretch"
-                      RowSpacing="20">
-                <Grid.RowDefinitions>
-                  <RowDefinition Height="Auto" />
-                  <RowDefinition Height="Auto" />
-                  <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Grid Grid.Row="0"
-                      HorizontalAlignment="Stretch"
-                      RowSpacing="8"
-                      ColumnSpacing="16">
+        <Grid Padding="24" Background="{ThemeResource SpectrumCanvasBrush}">
+          <Grid x:Name="InvestigatePage" Background="{ThemeResource SpectrumInvestigateBackground}"
+                SizeChanged="InvestigatePage_SizeChanged">
+            <ScrollViewer x:Name="InvestigateScrollViewer" HorizontalContentAlignment="Stretch"
+                          HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+              <Grid x:Name="ResultsAndQuickGrid" HorizontalAlignment="Stretch" Padding="8,12,8,24"
+                    ColumnSpacing="18" RowSpacing="18">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" MinWidth="0" />
-                    <ColumnDefinition Width="Auto" />
-                  </Grid.ColumnDefinitions>
-                  <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                  </Grid.RowDefinitions>
-                  <StackPanel MinWidth="0" Spacing="4">
-                    <TextBlock Text="Investigate" Style="{StaticResource AegisPageTitleTextStyle}" />
-                    <TextBlock Text="Ask a focused question about this Windows system."
-                               Style="{StaticResource PageDescriptionTextStyle}" />
-                  </StackPanel>
-                  <Button Grid.Row="1"
-                          Grid.Column="0"
-                          Grid.ColumnSpan="2"
-                          x:Name="NewInvestigationButton"
-                          Content="New investigation"
-                          Click="NewInvestigationButton_Click"
-                          HorizontalAlignment="Left"
-                          VerticalAlignment="Center" />
-                </Grid>
+                  <ColumnDefinition x:Name="ResultsColumn" Width="3*" />
+                  <ColumnDefinition x:Name="QuickColumn" Width="2*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                  <RowDefinition x:Name="ResultsRow" Height="Auto" /><RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-                <Border Grid.Row="1"
-                        Style="{StaticResource InvestigationInputCardStyle}"
-                        HorizontalAlignment="Stretch"
-                        Padding="20">
-                  <StackPanel Spacing="14">
-                    <TextBlock Text="Investigation question"
-                               Style="{StaticResource AegisSectionHeadingTextStyle}"
-                               Foreground="{ThemeResource AegisQuestionForegroundBrush}" />
-                    <TextBox x:Name="QuestionTextBox"
-                             PlaceholderText="For example: What may explain the recent system errors?"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             MinHeight="76"
-                             FontFamily="Segoe UI Variable"
-                             FontSize="14"
-                             PointerEntered="QuestionTextBox_PointerEntered"
-                             PointerExited="QuestionTextBox_PointerExited"
-                             Background="{ThemeResource AegisQuestionBackgroundBrush}"
-                             Foreground="{ThemeResource AegisQuestionForegroundBrush}"
-                             PlaceholderForeground="{ThemeResource AegisQuestionPlaceholderBrush}"
-                             BorderBrush="{ThemeResource AegisQuestionBorderBrush}"
-                             SelectionHighlightColor="{ThemeResource AegisQuestionSelectionBrush}"
-                             FocusVisualPrimaryBrush="{ThemeResource AegisQuestionFocusBrush}"
-                             FocusVisualSecondaryBrush="{ThemeResource AegisQuestionFocusBrush}" />
-                    <Grid ColumnSpacing="12">
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" MinWidth="0" />
-                      </Grid.ColumnDefinitions>
-                      <Button x:Name="InvestigateButton"
-                              Style="{StaticResource AegisPrimaryButtonStyle}"
-                              Content="Investigate"
-                              Click="InvestigateButton_Click"
-                              MinWidth="120" />
-                      <Button x:Name="CancelInvestigationButton"
-                              Grid.Column="1"
-                              Content="Cancel"
-                              Click="CancelInvestigationButton_Click"
-                              IsEnabled="False"
-                              MinWidth="84" />
-                      <ProgressRing Grid.Column="2"
-                                    x:Name="BusyIndicator"
-                                    IsActive="False"
-                                    Width="24"
-                                    Height="24"
-                                    Foreground="{ThemeResource AegisQuestionForegroundBrush}"
-                                    VerticalAlignment="Center" />
-                      <TextBlock Grid.Column="3"
-                                 x:Name="StatusTextBlock"
-                                 VerticalAlignment="Center"
-                                 TextWrapping="Wrap"
-                                 Foreground="{ThemeResource AegisQuestionForegroundBrush}"
-                                 Opacity="0.9" />
+                <StackPanel x:Name="HeroHeadingPanel" Grid.ColumnSpan="2" Spacing="8" MinWidth="0">
+                  <Border Background="{ThemeResource SpectrumPromptSurface}" CornerRadius="20" Padding="15,7" HorizontalAlignment="Left">
+                    <TextBlock Text="WELCOME TO AEGIS" FontSize="13" FontWeight="Bold" Foreground="{ThemeResource SpectrumPromptText}" />
+                  </Border>
+                  <TextBlock x:Name="HeroTitle" FontSize="36" LineHeight="44" FontWeight="Bold"
+                             Foreground="{ThemeResource SpectrumHeroText}" TextWrapping="Wrap">
+                    <Run Text="Understand your " /><Run Text="system." Foreground="{ThemeResource SpectrumHeroAccent}" />
+                  </TextBlock>
+                  <TextBlock Text="Investigate Windows performance, errors, and system behavior with clear, actionable results."
+                             FontSize="16" LineHeight="23" TextWrapping="Wrap"
+                             HorizontalAlignment="Left" Foreground="{ThemeResource SpectrumHeroSecondaryText}" />
+                </StackPanel>
+
+                <Border Grid.Row="1" Background="{ThemeResource SpectrumComposerOutline}" CornerRadius="18" Padding="2" VerticalAlignment="Center">
+                  <Border Background="{ThemeResource SpectrumComposerSurface}" CornerRadius="16" Padding="12">
+                    <StackPanel Spacing="8">
+                      <TextBox x:Name="QuestionTextBox" AutomationProperties.Name="Investigation question"
+                               PlaceholderText="Ask a question about your Windows system"
+                               AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxLength="2000" FontSize="15" />
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="InvestigateButton" Content="Investigate" Click="InvestigateButton_Click"
+                                AutomationProperties.Name="Investigate" FontWeight="SemiBold"
+                                Background="{ThemeResource SpectrumSubmitBrush}" Foreground="{ThemeResource SpectrumSubmitText}"
+                                BorderBrush="{ThemeResource SpectrumSubmitBrush}" MinWidth="110" CornerRadius="10" />
+                        <Button x:Name="CancelInvestigationButton" Content="Cancel" Click="CancelInvestigationButton_Click"
+                                IsEnabled="False" CornerRadius="10" />
+                        <ProgressRing x:Name="BusyIndicator" IsActive="False" Width="22" Height="22" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <TextBlock x:Name="StatusTextBlock" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
+                                 Foreground="{ThemeResource SpectrumHeroSecondaryText}" />
+                    </StackPanel>
+                  </Border>
+                </Border>
+                <Image x:Name="HeroArtwork" Grid.Row="1" Grid.Column="1" Source="ms-appx:///Assets/SpectrumHero.png"
+                       MaxWidth="430" MaxHeight="250" Stretch="Uniform" VerticalAlignment="Top" Visibility="Collapsed"
+                       Opacity="{ThemeResource SpectrumArtOpacity}" IsHitTestVisible="False"
+                       AutomationProperties.AccessibilityView="Raw" />
+
+                <Border x:Name="ResultCard" Grid.Row="2" Style="{StaticResource SurfaceCardStyle}" Padding="20" MinWidth="0" SizeChanged="ResultCard_SizeChanged">
+                  <Grid RowSpacing="14">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <Grid x:Name="ResultsHeader" ColumnSpacing="8">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                      <TextBlock Text="Investigation results" Style="{StaticResource AegisCardHeadingTextStyle}" TextWrapping="Wrap" />
+                      <Button x:Name="NewInvestigationButton" Grid.Column="1" AutomationProperties.Name="New investigation"
+                              MinHeight="40" Padding="12,8" CornerRadius="12" FontWeight="SemiBold"
+                              Background="{ThemeResource SpectrumSecondaryActionSurface}"
+                              Foreground="{ThemeResource SpectrumSecondaryActionText}"
+                              BorderBrush="{ThemeResource SpectrumSecondaryActionBorder}" BorderThickness="1"
+                              Click="NewInvestigationButton_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <FontIcon Glyph="&#xE710;" FontSize="16" /><TextBlock Text="New investigation" />
+                        </StackPanel>
+                      </Button>
                     </Grid>
-                  </StackPanel>
+                    <ScrollViewer x:Name="ResultsContentScrollViewer" Grid.Row="1" VerticalAlignment="Stretch" Margin="0,0,-12,0"
+                                  HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                                  HorizontalContentAlignment="Stretch">
+                      <ScrollViewer.Resources>
+                        <ResourceDictionary>
+                          <ResourceDictionary.ThemeDictionaries>
+                            <ResourceDictionary x:Key="Default">
+                              <SolidColorBrush x:Key="ScrollBarThumbBackground" Color="#807595" />
+                              <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#807595" />
+                            </ResourceDictionary>
+                            <ResourceDictionary x:Key="HighContrast">
+                              <SolidColorBrush x:Key="ScrollBarThumbBackground" Color="{ThemeResource SystemColorButtonTextColor}" />
+                              <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="{ThemeResource SystemColorButtonTextColor}" />
+                            </ResourceDictionary>
+                          </ResourceDictionary.ThemeDictionaries>
+                          <x:Double x:Key="ScrollBarVerticalThumbMinWidth">10</x:Double>
+                          <x:Double x:Key="ScrollBarThumbStrokeThickness">2</x:Double>
+                        </ResourceDictionary>
+                      </ScrollViewer.Resources>
+                      <StackPanel Spacing="14" Padding="0,0,12,0">
+                        <StackPanel x:Name="EmptyResultsPanel" Spacing="10" Padding="4,14,4,8">
+                          <FontIcon Glyph="&#xE946;" FontSize="30" HorizontalAlignment="Left"
+                                    Foreground="{ThemeResource SpectrumQuickVioletIcon}"
+                                    AutomationProperties.AccessibilityView="Raw" />
+                          <TextBlock Text="Ready to investigate" Style="{StaticResource AegisSectionHeadingTextStyle}" TextWrapping="Wrap" />
+                          <TextBlock Text="Ask a question about your Windows system or choose a Quick Investigation to get started."
+                                     Style="{StaticResource PageDescriptionTextStyle}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <TextBlock x:Name="ResultsStateTextBlock" Visibility="Collapsed"
+                                   AutomationProperties.LiveSetting="Polite" TextWrapping="Wrap"
+                                   Style="{StaticResource PageDescriptionTextStyle}" />
+                        <StackPanel x:Name="InvestigationResultSectionsPanel" Spacing="12" />
+                      </StackPanel>
+                    </ScrollViewer>
+                  </Grid>
                 </Border>
-
-                <Border Grid.Row="2"
-                        x:Name="ResultCard"
-                        Style="{StaticResource ReportHostStyle}"
-                        HorizontalAlignment="Stretch"
-                        Visibility="Collapsed"
-                        Padding="0,8,0,16">
-                  <StackPanel Spacing="16">
-                    <TextBlock Text="Investigation result"
-                               Style="{StaticResource AegisCardHeadingTextStyle}"
-                               Margin="20,0" />
-                    <StackPanel x:Name="InvestigationResultSectionsPanel" Spacing="16" />
-                  </StackPanel>
+                <Border x:Name="QuickInvestigationsSection" Grid.Row="2" Grid.Column="1" Style="{StaticResource SurfaceCardStyle}" Padding="14" MinWidth="0">
+                  <Grid RowSpacing="8">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <TextBlock Text="Quick investigations" Style="{StaticResource AegisCardHeadingTextStyle}" TextWrapping="Wrap" />
+                    <ItemsControl x:Name="QuickInvestigationsPanel" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+                      <ItemsControl.ItemsPanel><ItemsPanelTemplate><Grid /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                      <Grid x:Name="QuickCardsGrid" ColumnSpacing="10" VerticalAlignment="Stretch" SizeChanged="QuickCardsGrid_SizeChanged">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition x:Name="QuickCardSecondColumn" Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="*" /><RowDefinition Height="*" /><RowDefinition x:Name="QuickCardRow4" Height="0" /><RowDefinition x:Name="QuickCardRow5" Height="0" /><RowDefinition x:Name="QuickCardRow6" Height="0" /></Grid.RowDefinitions>
+                          <Button x:Name="PerformanceQuickCard" Tag="Performance" Click="SuggestionButton_Click" AutomationProperties.Name="Performance: explore resource usage"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" Margin="0,0,0,6" Padding="8" CornerRadius="14"
+                                  Background="{ThemeResource SpectrumQuickViolet}" Foreground="{ThemeResource SpectrumQuickText}">
+                            <StackPanel Spacing="4"><Border Style="{StaticResource SpectrumQuickIconBadgeStyle}"><FontIcon Glyph="&#xE945;" FontSize="30" Foreground="{ThemeResource SpectrumQuickCardVioletIcon}" /></Border><TextBlock Text="Performance" Style="{StaticResource SpectrumQuickTitleStyle}" /><TextBlock Text="Explore resource usage" Style="{StaticResource SpectrumQuickDescriptionStyle}" /></StackPanel>
+                          </Button>
+                          <Button x:Name="ErrorsQuickCard" Tag="SystemErrors" Grid.Column="1" Click="SuggestionButton_Click" AutomationProperties.Name="System errors: review recent issues"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" Margin="0,0,0,6" Padding="8" CornerRadius="14"
+                                  Background="{ThemeResource SpectrumQuickTeal}" Foreground="{ThemeResource SpectrumQuickText}">
+                            <StackPanel Spacing="4"><Border Style="{StaticResource SpectrumQuickIconBadgeStyle}"><FontIcon Glyph="&#xE7BA;" FontSize="30" Foreground="{ThemeResource SpectrumQuickTealIcon}" /></Border><TextBlock Text="System errors" Style="{StaticResource SpectrumQuickTitleStyle}" /><TextBlock Text="Review recent issues" Style="{StaticResource SpectrumQuickDescriptionStyle}" /></StackPanel>
+                          </Button>
+                          <Button x:Name="InformationQuickCard" Tag="SystemInformation" Grid.Row="1" Click="SuggestionButton_Click" AutomationProperties.Name="System information: explore Windows details"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" Margin="0,0,0,6" Padding="8" CornerRadius="14"
+                                  Background="{ThemeResource SpectrumQuickPeach}" Foreground="{ThemeResource SpectrumQuickText}">
+                            <StackPanel Spacing="4"><Border Style="{StaticResource SpectrumQuickIconBadgeStyle}"><FontIcon Glyph="&#xE7F4;" FontSize="30" Foreground="{ThemeResource SpectrumQuickPeachIcon}" /></Border><TextBlock Text="System information" Style="{StaticResource SpectrumQuickTitleStyle}" /><TextBlock Text="Explore Windows details" Style="{StaticResource SpectrumQuickDescriptionStyle}" /></StackPanel>
+                          </Button>
+                          <Button x:Name="HealthQuickCard" Tag="SystemHealth" Grid.Row="1" Grid.Column="1" Click="SuggestionButton_Click" AutomationProperties.Name="System health: general overview"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" Margin="0,0,0,6" Padding="8" CornerRadius="14"
+                                  Background="{ThemeResource SpectrumQuickBlue}" Foreground="{ThemeResource SpectrumQuickText}">
+                            <StackPanel Spacing="4"><Border Style="{StaticResource SpectrumQuickIconBadgeStyle}"><FontIcon Glyph="&#xE946;" FontSize="30" Foreground="{ThemeResource SpectrumQuickBlueIcon}" /></Border><TextBlock Text="System health" Style="{StaticResource SpectrumQuickTitleStyle}" /><TextBlock Text="Get a general overview" Style="{StaticResource SpectrumQuickDescriptionStyle}" /></StackPanel>
+                          </Button>
+                          <Button x:Name="ProcessesQuickCard" Tag="TopProcesses" Grid.Row="2" Click="SuggestionButton_Click" AutomationProperties.Name="Top processes: inspect resource use"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" Margin="0,0,0,6" Padding="8" CornerRadius="14"
+                                  Background="{ThemeResource SpectrumQuickAmber}" Foreground="{ThemeResource SpectrumQuickText}">
+                            <StackPanel Spacing="4"><Border Style="{StaticResource SpectrumQuickIconBadgeStyle}"><FontIcon Glyph="&#xE9D2;" FontSize="30" Foreground="{ThemeResource SpectrumQuickAmberIcon}" /></Border><TextBlock Text="Top processes" Style="{StaticResource SpectrumQuickTitleStyle}" /><TextBlock Text="Inspect resource use" Style="{StaticResource SpectrumQuickDescriptionStyle}" /></StackPanel>
+                          </Button>
+                          <Button x:Name="ReliabilityQuickCard" Tag="Reliability" Grid.Row="2" Grid.Column="1" Click="SuggestionButton_Click" AutomationProperties.Name="Stability and reliability: review error evidence"
+                                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch" HorizontalContentAlignment="Stretch" Margin="0,0,0,6" Padding="8" CornerRadius="14"
+                                  Background="{ThemeResource SpectrumQuickRose}" Foreground="{ThemeResource SpectrumQuickText}">
+                            <StackPanel Spacing="4"><Border Style="{StaticResource SpectrumQuickIconBadgeStyle}"><FontIcon Glyph="&#xE9D9;" FontSize="30" Foreground="{ThemeResource SpectrumQuickRoseIcon}" /></Border><TextBlock Text="Stability &amp; reliability" Style="{StaticResource SpectrumQuickTitleStyle}" /><TextBlock Text="Review error evidence" Style="{StaticResource SpectrumQuickDescriptionStyle}" /></StackPanel>
+                          </Button>
+                      </Grid>
+                    </ItemsControl>
+                  </Grid>
                 </Border>
-                </Grid>
               </Grid>
             </ScrollViewer>
           </Grid>
-
           <Grid x:Name="HistoryPage" Visibility="Collapsed">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" />
@@ -461,13 +502,18 @@
                                Margin="0,6,0,0" />
                     <TextBlock Text="A calm workspace for observing narrowly scoped Windows information and understanding the evidence without changing the system."
                                Style="{StaticResource PageDescriptionTextStyle}" />
-                    <TextBlock Text="The app follows the system light or dark theme."
+                    <TextBlock Text="Choose an app appearance. Windows high contrast remains respected."
                                Style="{StaticResource MetadataTextStyle}"
                                TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
                 <Border Style="{StaticResource SurfaceCardStyle}" Padding="20">
                   <StackPanel Spacing="10">
+                    <TextBlock Text="Appearance" Style="{StaticResource AegisCardHeadingTextStyle}" />
+                    <ComboBox x:Name="AppearanceComboBox" Header="App theme" AutomationProperties.Name="App theme" HorizontalAlignment="Left">
+                      <ComboBoxItem Content="Light" /><ComboBoxItem Content="Dark" /><ComboBoxItem Content="System" />
+                    </ComboBox>
+                    <TextBlock x:Name="AppearanceStatusTextBlock" Style="{StaticResource MetadataTextStyle}" TextWrapping="Wrap" />
                     <TextBlock Text="AI configuration" Style="{StaticResource AegisCardHeadingTextStyle}" />
                     <TextBlock Text="Live OpenAI configuration uses the existing process-scoped environment variables below."
                                Style="{StaticResource PageDescriptionTextStyle}" />

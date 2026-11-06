@@ -18,6 +18,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <Compile Include="..\..\src\Aegis\OpenAiLanguageModel.cs" Link="OpenAiLanguageModel.cs" />
     <Compile Include="..\..\src\Aegis\InvestigationReportPresentation.cs" Link="InvestigationReportPresentation.cs" />
+    <Compile Include="..\..\src\Aegis\InvestigationSuggestions.cs" Link="InvestigationSuggestions.cs" />
+    <Compile Include="..\..\src\Aegis\AppearancePreferences.cs" Link="AppearancePreferences.cs" />
     <Compile Include="..\..\src\Aegis\PresentationFormatting.cs" Link="PresentationFormatting.cs" />
     <Compile Include="..\..\src\Aegis\UnavailableLanguageModel.cs" Link="UnavailableLanguageModel.cs" />
     <Compile Include="..\..\src\Aegis\WindowsSystemInfoObservationTool.cs" Link="WindowsSystemInfoObservationTool.cs" />

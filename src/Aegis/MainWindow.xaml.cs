@@ -4,8 +4,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using WinRT.Interop;
@@ -20,6 +21,8 @@ public sealed partial class MainWindow : Window
     private readonly BaselineService _baselineService;
     private InvestigationDetails? _selectedInvestigation;
     private CancellationTokenSource? _activeInvestigationCancellation;
+    private readonly AppearancePreferences _appearancePreferences = new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Aegis"));
 
     private sealed record ObservationExecutionListItem(
         InvestigationStepExecution Execution,
@@ -38,6 +41,11 @@ public sealed partial class MainWindow : Window
         _historyService = historyService ?? throw new ArgumentNullException(nameof(historyService));
         _baselineService = baselineService ?? throw new ArgumentNullException(nameof(baselineService));
         InitializeComponent();
+        ResultsContentScrollViewer.MaxHeight = 180;
+        var appearance = _appearancePreferences.Load();
+        AppearanceComboBox.SelectedIndex = (int)appearance;
+        ApplyAppearance(appearance);
+        AppearanceComboBox.SelectionChanged += AppearanceComboBox_SelectionChanged;
         SettingsVersionTextBlock.Text = $"Application version {ApplicationInfo.Version}";
         RootNavigationView.SelectedItem = InvestigateNavigationItem;
         ConfigureDefaultWindowSize();
@@ -98,9 +106,93 @@ public sealed partial class MainWindow : Window
 
         QuestionTextBox.Text = string.Empty;
         StatusTextBlock.Text = string.Empty;
-        ResultCard.Visibility = Visibility.Collapsed;
         InvestigationResultSectionsPanel.Children.Clear();
+        ResultsStateTextBlock.Text = string.Empty;
+        ResultsStateTextBlock.Visibility = Visibility.Collapsed;
+        EmptyResultsPanel.Visibility = Visibility.Visible;
         RootNavigationView.SelectedItem = InvestigateNavigationItem;
+        QuestionTextBox.Focus(FocusState.Programmatic);
+    }
+
+    private void InvestigatePage_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // Re-measure the original card size before expanding the report viewport.
+        ResultsContentScrollViewer.MaxHeight = 180;
+        DispatcherQueue.TryEnqueue(UpdateResultsViewportHeight);
+        var isWide = e.NewSize.Width >= 760;
+        var isDesktop = e.NewSize.Width >= 1050;
+        HeroArtwork.Visibility = isWide ? Visibility.Visible : Visibility.Collapsed;
+        HeroArtwork.MaxHeight = isDesktop ? Math.Clamp(e.NewSize.Height * 0.32, 200, 300)
+            : Math.Clamp(e.NewSize.Height * 0.30, 180, 260);
+        Grid.SetRow(HeroArtwork, isDesktop ? 0 : 1);
+        Grid.SetRowSpan(HeroArtwork, isDesktop ? 2 : 1);
+        Grid.SetColumnSpan(HeroHeadingPanel, isDesktop ? 1 : 2);
+        HeroTitle.FontSize = isWide ? 48 : 36;
+        HeroTitle.LineHeight = isWide ? 56 : 44;
+        var sideBySide = e.NewSize.Width >= 760;
+        ResultsColumn.Width = new GridLength(sideBySide ? 3 : 1, GridUnitType.Star);
+        QuickColumn.Width = new GridLength(sideBySide ? 2 : 0, GridUnitType.Star);
+        Grid.SetColumn(QuickInvestigationsSection, sideBySide ? 1 : 0);
+        Grid.SetRow(QuickInvestigationsSection, sideBySide ? 2 : 3);
+        ResultsRow.MinHeight = sideBySide
+            ? Math.Clamp(e.NewSize.Height - (isDesktop ? 400 : 420), 220, isDesktop ? 650 : 430)
+            : 0;
+    }
+
+    private void ResultCard_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateResultsViewportHeight();
+
+    private void UpdateResultsViewportHeight()
+    {
+        if (ResultCard.ActualHeight <= 0 || ResultsHeader.ActualHeight <= 0) return;
+        var chromeHeight = ResultCard.Padding.Top + ResultCard.Padding.Bottom +
+            ResultCard.BorderThickness.Top + ResultCard.BorderThickness.Bottom + ResultsHeader.ActualHeight + 14;
+        ResultsContentScrollViewer.MaxHeight = Math.Max(0, ResultCard.ActualHeight - chromeHeight);
+    }
+
+    private void QuickCardsGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var singleColumn = e.NewSize.Width < 260;
+        QuickCardSecondColumn.Width = new GridLength(singleColumn ? 0 : 1, GridUnitType.Star);
+        var extraRowHeight = singleColumn ? GridLength.Auto : new GridLength(0);
+        QuickCardRow4.Height = extraRowHeight;
+        QuickCardRow5.Height = extraRowHeight;
+        QuickCardRow6.Height = extraRowHeight;
+        Button[] cards = [PerformanceQuickCard, ErrorsQuickCard, InformationQuickCard,
+            HealthQuickCard, ProcessesQuickCard, ReliabilityQuickCard];
+        for (var index = 0; index < cards.Length; index++)
+        {
+            Grid.SetColumn(cards[index], singleColumn ? 0 : index % 2);
+            Grid.SetRow(cards[index], singleColumn ? index : index / 2);
+        }
+    }
+
+    private void ApplyAppearance(AppearanceChoice choice) => RootLayout.RequestedTheme = choice switch
+    {
+        AppearanceChoice.Dark => ElementTheme.Dark,
+        AppearanceChoice.System => ElementTheme.Default,
+        _ => ElementTheme.Light
+    };
+
+    private void AppearanceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (AppearanceComboBox.SelectedIndex is < 0 or > 2) return;
+        var choice = (AppearanceChoice)AppearanceComboBox.SelectedIndex;
+        ApplyAppearance(choice);
+        AppearanceStatusTextBlock.Text = _appearancePreferences.Save(choice)
+            ? "" : "Appearance changed for this session, but could not be saved.";
+    }
+
+    private void SuggestionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeInvestigationCancellation is not null ||
+            sender is not Button { Tag: string suggestion } ||
+            InvestigationSuggestions.GetQuestion(suggestion) is not { } question)
+        {
+            return;
+        }
+
+        QuestionTextBox.Text = question;
+        StatusTextBlock.Text = string.Empty;
         QuestionTextBox.Focus(FocusState.Programmatic);
     }
 
@@ -116,20 +208,24 @@ public sealed partial class MainWindow : Window
         InvestigateButton.IsEnabled = false;
         NewInvestigationButton.IsEnabled = false;
         QuestionTextBox.IsEnabled = false;
+        QuickInvestigationsPanel.IsEnabled = false;
         CancelInvestigationButton.IsEnabled = true;
         CancelInvestigationButton.Content = "Cancel";
         BusyIndicator.IsActive = true;
         StatusTextBlock.Text = "Investigating…";
-        ResultCard.Visibility = Visibility.Collapsed;
+        InvestigationResultSectionsPanel.Children.Clear();
+        EmptyResultsPanel.Visibility = Visibility.Collapsed;
+        ResultsStateTextBlock.Visibility = Visibility.Visible;
+        ResultsStateTextBlock.Text = "Investigating…";
 
         try
         {
             var response = await _investigationService.InvestigateAsync(
                 QuestionTextBox.Text,
                 investigationCancellation.Token);
-            RenderReport(InvestigationResultSectionsPanel, response.Report);
-            ResultCard.Visibility = Visibility.Visible;
-            StatusTextBlock.Text = $"Investigation {response.InvestigationId} completed.";
+            RenderReport(InvestigationResultSectionsPanel, response.Report, styleInvestigation: true);
+            ResultsStateTextBlock.Text = "Completed. Your report is shown below.";
+            StatusTextBlock.Text = "Investigation completed. Results are below.";
         }
         catch (ArgumentException exception)
         {
@@ -197,8 +293,13 @@ public sealed partial class MainWindow : Window
             InvestigateButton.IsEnabled = true;
             NewInvestigationButton.IsEnabled = true;
             QuestionTextBox.IsEnabled = true;
+            QuickInvestigationsPanel.IsEnabled = true;
             CancelInvestigationButton.IsEnabled = false;
             CancelInvestigationButton.Content = "Cancel";
+            if (InvestigationResultSectionsPanel.Children.Count == 0)
+            {
+                ResultsStateTextBlock.Text = StatusTextBlock.Text;
+            }
             await RefreshHistoryAsync();
         }
     }
@@ -214,25 +315,8 @@ public sealed partial class MainWindow : Window
         CancelInvestigationButton.IsEnabled = false;
         CancelInvestigationButton.Content = "Cancelling…";
         StatusTextBlock.Text = "Cancelling…";
+        ResultsStateTextBlock.Text = "Cancelling…";
         cancellation.Cancel();
-    }
-
-    private void QuestionTextBox_PointerEntered(object sender, PointerRoutedEventArgs e)
-    {
-        SetQuestionTextBoxBackground("AegisQuestionHoverBrush");
-    }
-
-    private void QuestionTextBox_PointerExited(object sender, PointerRoutedEventArgs e)
-    {
-        SetQuestionTextBoxBackground("AegisQuestionBackgroundBrush");
-    }
-
-    private void SetQuestionTextBoxBackground(string resourceKey)
-    {
-        if (QuestionTextBox.IsEnabled && GetBrush(resourceKey) is { } brush)
-        {
-            QuestionTextBox.Background = brush;
-        }
     }
 
     private async void RefreshHistoryButton_Click(object sender, RoutedEventArgs e) =>
@@ -696,7 +780,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static void RenderReport(StackPanel target, InvestigationReport report)
+    private static void RenderReport(StackPanel target, InvestigationReport report, bool styleInvestigation = false)
     {
         target.Children.Clear();
         var sections = InvestigationReportPresentation.BuildSections(report);
@@ -709,12 +793,16 @@ public sealed partial class MainWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0)
             };
-            sectionPanel.Children.Add(new TextBlock
+            var heading = new TextBlock
             {
                 Text = section.Heading,
-                Style = GetStyle("AegisSectionHeadingTextStyle"),
-                Foreground = GetBrush("AegisAccentBrush", "AccentTextFillColorPrimaryBrush")
-            });
+                Style = GetStyle(styleInvestigation ? "InvestigationReportHeadingStyle" : "AegisSectionHeadingTextStyle")
+            };
+            if (!styleInvestigation)
+            {
+                heading.Foreground = GetBrush("AegisAccentBrush", "AccentTextFillColorPrimaryBrush");
+            }
+            sectionPanel.Children.Add(heading);
 
             foreach (var item in section.Items)
             {
@@ -723,13 +811,17 @@ public sealed partial class MainWindow : Window
                     Spacing = 8,
                     Margin = new Thickness(0, 0, 0, 8)
                 };
-                itemPanel.Children.Add(new TextBlock
+                var itemText = new TextBlock
                 {
                     Text = item.Text,
-                    Style = GetStyle("AegisBodyTextStyle"),
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = GetBrush("AegisPrimaryTextBrush", "TextFillColorPrimaryBrush")
-                });
+                    Style = GetStyle(styleInvestigation ? "InvestigationReportBodyStyle" : "AegisBodyTextStyle"),
+                    TextWrapping = TextWrapping.Wrap
+                };
+                if (!styleInvestigation)
+                {
+                    itemText.Foreground = GetBrush("AegisPrimaryTextBrush", "TextFillColorPrimaryBrush");
+                }
+                itemPanel.Children.Add(itemText);
                 if (item.EvidenceStepIds.Count > 0)
                 {
                     itemPanel.Children.Add(new TextBlock
@@ -740,18 +832,41 @@ public sealed partial class MainWindow : Window
                     });
                 }
 
-                sectionPanel.Children.Add(itemPanel);
+                if (styleInvestigation && section.Heading != "Summary")
+                {
+                    var row = new Grid { ColumnSpacing = 10 };
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    var bullet = new TextBlock { Text = "•", Style = GetStyle("InvestigationReportBulletStyle") };
+                    AutomationProperties.SetAccessibilityView(bullet, AccessibilityView.Raw);
+                    row.Children.Add(bullet);
+                    Grid.SetColumn(itemPanel, 1);
+                    row.Children.Add(itemPanel);
+                    sectionPanel.Children.Add(row);
+                }
+                else
+                {
+                    sectionPanel.Children.Add(itemPanel);
+                }
             }
 
-            target.Children.Add(new Border
+            var sectionCard = new Border
             {
                 Padding = new Thickness(20),
                 CornerRadius = new CornerRadius(12),
-                Background = GetSectionBrush(),
                 BorderThickness = new Thickness(0),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 Child = sectionPanel
-            });
+            };
+            if (styleInvestigation)
+            {
+                sectionCard.Style = GetStyle("InvestigationReportSectionStyle");
+            }
+            else
+            {
+                sectionCard.Background = GetSectionBrush();
+            }
+            target.Children.Add(sectionCard);
         }
     }
 

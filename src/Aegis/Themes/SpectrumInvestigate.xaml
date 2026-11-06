@@ -1,0 +1,98 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <ImageBrush x:Key="SpectrumInvestigateBackground" ImageSource="ms-appx:///Assets/SpectrumBackground.png" Stretch="UniformToFill" AlignmentY="Top" />
+      <SolidColorBrush x:Key="SpectrumHeroText" Color="#101B54" />
+      <LinearGradientBrush x:Key="SpectrumHeroAccent" StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#7626E8" Offset="0" /><GradientStop Color="#1267E8" Offset="1" /></LinearGradientBrush>
+      <SolidColorBrush x:Key="SpectrumHeroSecondaryText" Color="#465581" />
+      <SolidColorBrush x:Key="SpectrumComposerSurface" Color="#FFFFFF" />
+      <LinearGradientBrush x:Key="SpectrumComposerOutline" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#7138EF" Offset="0" /><GradientStop Color="#1267E8" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumSubmitBrush" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#692BD5" Offset="0" /><GradientStop Color="#2948B8" Offset="1" /></LinearGradientBrush>
+      <SolidColorBrush x:Key="SpectrumSubmitText" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="SpectrumPromptSurface" Color="#E9DFFF" />
+      <SolidColorBrush x:Key="SpectrumPromptText" Color="#3D247D" />
+      <LinearGradientBrush x:Key="SpectrumQuickViolet" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#D7C4FF" Offset="0" /><GradientStop Color="#F1E8FF" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickTeal" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#A5E9E0" Offset="0" /><GradientStop Color="#E0FAF5" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickPeach" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#FFD0AD" Offset="0" /><GradientStop Color="#FFF0DF" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickBlue" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#B3D7FF" Offset="0" /><GradientStop Color="#E4F0FF" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickAmber" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#FFE29B" Offset="0" /><GradientStop Color="#FFF2CD" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickRose" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#F7B7D7" Offset="0" /><GradientStop Color="#FFE5F0" Offset="1" /></LinearGradientBrush>
+      <SolidColorBrush x:Key="SpectrumQuickIconSurface" Color="#CCFFFFFF" />
+      <SolidColorBrush x:Key="SpectrumQuickText" Color="#101B54" />
+      <SolidColorBrush x:Key="SpectrumQuickVioletIcon" Color="#6A2BD4" />
+      <SolidColorBrush x:Key="SpectrumQuickCardVioletIcon" Color="#7037ED" />
+      <SolidColorBrush x:Key="SpectrumQuickTealIcon" Color="#008F91" />
+      <SolidColorBrush x:Key="SpectrumQuickPeachIcon" Color="#D65B15" />
+      <SolidColorBrush x:Key="SpectrumQuickBlueIcon" Color="#1267DB" />
+      <SolidColorBrush x:Key="SpectrumQuickAmberIcon" Color="#A76400" />
+      <SolidColorBrush x:Key="SpectrumQuickRoseIcon" Color="#B51D6D" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionSurface" Color="#F5F2FF" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionBorder" Color="#B8A1F0" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionText" Color="#43218D" />
+      <x:Double x:Key="SpectrumArtOpacity">1</x:Double>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Default">
+      <SolidColorBrush x:Key="SpectrumInvestigateBackground" Color="#15172C" />
+      <SolidColorBrush x:Key="SpectrumHeroText" Color="#F5F5FF" />
+      <LinearGradientBrush x:Key="SpectrumHeroAccent" StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#C5ADFF" Offset="0" /><GradientStop Color="#91BEFF" Offset="1" /></LinearGradientBrush>
+      <SolidColorBrush x:Key="SpectrumHeroSecondaryText" Color="#C1C7E2" />
+      <SolidColorBrush x:Key="SpectrumComposerSurface" Color="#252944" />
+      <LinearGradientBrush x:Key="SpectrumComposerOutline" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#B096FF" Offset="0" /><GradientStop Color="#8EB9FF" Offset="1" /></LinearGradientBrush>
+      <SolidColorBrush x:Key="SpectrumSubmitBrush" Color="#B096FF" />
+      <SolidColorBrush x:Key="SpectrumSubmitText" Color="#211340" />
+      <SolidColorBrush x:Key="SpectrumPromptSurface" Color="#40345E" />
+      <SolidColorBrush x:Key="SpectrumPromptText" Color="#F5F0FF" />
+      <LinearGradientBrush x:Key="SpectrumQuickViolet" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#40345E" Offset="0" /><GradientStop Color="#302A4A" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickTeal" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#19494E" Offset="0" /><GradientStop Color="#16383F" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickPeach" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#50382D" Offset="0" /><GradientStop Color="#3C2C2B" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickBlue" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#283B62" Offset="0" /><GradientStop Color="#222E4E" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickAmber" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#554322" Offset="0" /><GradientStop Color="#3E321F" Offset="1" /></LinearGradientBrush>
+      <LinearGradientBrush x:Key="SpectrumQuickRose" StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#553047" Offset="0" /><GradientStop Color="#40283C" Offset="1" /></LinearGradientBrush>
+      <SolidColorBrush x:Key="SpectrumQuickIconSurface" Color="#553B3D59" />
+      <SolidColorBrush x:Key="SpectrumQuickText" Color="#F5F5FF" />
+      <SolidColorBrush x:Key="SpectrumQuickVioletIcon" Color="#D3C3FF" />
+      <SolidColorBrush x:Key="SpectrumQuickCardVioletIcon" Color="#D3C3FF" />
+      <SolidColorBrush x:Key="SpectrumQuickTealIcon" Color="#8DE4E5" />
+      <SolidColorBrush x:Key="SpectrumQuickPeachIcon" Color="#FFCAA7" />
+      <SolidColorBrush x:Key="SpectrumQuickBlueIcon" Color="#A7CDFF" />
+      <SolidColorBrush x:Key="SpectrumQuickAmberIcon" Color="#FFDB95" />
+      <SolidColorBrush x:Key="SpectrumQuickRoseIcon" Color="#FFBEDD" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionSurface" Color="#30294C" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionBorder" Color="#A994D8" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionText" Color="#F5F0FF" />
+      <x:Double x:Key="SpectrumArtOpacity">1</x:Double>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="HighContrast">
+      <SolidColorBrush x:Key="SpectrumInvestigateBackground" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="SpectrumHeroText" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="SpectrumHeroAccent" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="SpectrumHeroSecondaryText" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="SpectrumComposerSurface" Color="{ThemeResource SystemColorWindowColor}" />
+      <SolidColorBrush x:Key="SpectrumComposerOutline" Color="{ThemeResource SystemColorWindowTextColor}" />
+      <SolidColorBrush x:Key="SpectrumSubmitBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumSubmitText" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumPromptSurface" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumPromptText" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickViolet" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickTeal" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickPeach" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickBlue" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickAmber" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickRose" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickIconSurface" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickText" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickVioletIcon" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickCardVioletIcon" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickTealIcon" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickPeachIcon" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickBlueIcon" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickAmberIcon" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumQuickRoseIcon" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionSurface" Color="{ThemeResource SystemColorButtonFaceColor}" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionBorder" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <SolidColorBrush x:Key="SpectrumSecondaryActionText" Color="{ThemeResource SystemColorButtonTextColor}" />
+      <x:Double x:Key="SpectrumArtOpacity">0</x:Double>
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

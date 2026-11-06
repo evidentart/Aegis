@@ -3,40 +3,42 @@
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
         <controls:XamlControlsResources />
+        <ResourceDictionary Source="Themes/SpectrumCanvas.xaml" />
+        <ResourceDictionary Source="Themes/SpectrumInvestigate.xaml" />
       </ResourceDictionary.MergedDictionaries>
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="AegisPageBackgroundBrush" Color="#F7F9FC" />
+          <SolidColorBrush x:Key="AegisPageBackgroundBrush" Color="#F7F7FF" />
           <SolidColorBrush x:Key="AegisCardBackgroundBrush" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="AegisSubtleSurfaceBrush" Color="#EEF3F9" />
-          <SolidColorBrush x:Key="AegisBorderBrush" Color="#D8E2EE" />
-          <SolidColorBrush x:Key="AegisAccentBrush" Color="#2563EB" />
+          <SolidColorBrush x:Key="AegisSubtleSurfaceBrush" Color="#F0EEFF" />
+          <SolidColorBrush x:Key="AegisBorderBrush" Color="#DCDFF4" />
+          <SolidColorBrush x:Key="AegisAccentBrush" Color="#6031D5" />
           <SolidColorBrush x:Key="AegisAccentForegroundBrush" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="AegisPrimaryTextBrush" Color="#172033" />
-          <SolidColorBrush x:Key="AegisSecondaryTextBrush" Color="#526176" />
-          <SolidColorBrush x:Key="AegisTertiaryTextBrush" Color="#6B7A90" />
-          <SolidColorBrush x:Key="AegisQuestionBackgroundBrush" Color="#1D4ED8" />
-          <SolidColorBrush x:Key="AegisQuestionHoverBrush" Color="#2563EB" />
-          <SolidColorBrush x:Key="AegisQuestionBorderBrush" Color="#60A5FA" />
+          <SolidColorBrush x:Key="AegisPrimaryTextBrush" Color="#101B54" />
+          <SolidColorBrush x:Key="AegisSecondaryTextBrush" Color="#465581" />
+          <SolidColorBrush x:Key="AegisTertiaryTextBrush" Color="#526184" />
+          <SolidColorBrush x:Key="AegisQuestionBackgroundBrush" Color="#43219C" />
+          <SolidColorBrush x:Key="AegisQuestionHoverBrush" Color="#5128B3" />
+          <SolidColorBrush x:Key="AegisQuestionBorderBrush" Color="#9E84F3" />
           <SolidColorBrush x:Key="AegisQuestionForegroundBrush" Color="#FFFFFF" />
           <SolidColorBrush x:Key="AegisQuestionPlaceholderBrush" Color="#DCEBFF" />
           <SolidColorBrush x:Key="AegisQuestionSelectionBrush" Color="#93C5FD" />
           <SolidColorBrush x:Key="AegisQuestionFocusBrush" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="AegisSelectedItemBrush" Color="#2563EB" />
-          <SolidColorBrush x:Key="AegisSelectedItemHoverBrush" Color="#1D4ED8" />
-          <SolidColorBrush x:Key="AegisSelectedItemPressedBrush" Color="#1E40AF" />
+          <SolidColorBrush x:Key="AegisSelectedItemBrush" Color="#6031D5" />
+          <SolidColorBrush x:Key="AegisSelectedItemHoverBrush" Color="#5128B3" />
+          <SolidColorBrush x:Key="AegisSelectedItemPressedBrush" Color="#43219C" />
           <SolidColorBrush x:Key="AegisSelectedItemForegroundBrush" Color="#FFFFFF" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="AegisPageBackgroundBrush" Color="#151922" />
-          <SolidColorBrush x:Key="AegisCardBackgroundBrush" Color="#202633" />
-          <SolidColorBrush x:Key="AegisSubtleSurfaceBrush" Color="#263142" />
-          <SolidColorBrush x:Key="AegisBorderBrush" Color="#3A4658" />
-          <SolidColorBrush x:Key="AegisAccentBrush" Color="#5B8DEF" />
-          <SolidColorBrush x:Key="AegisAccentForegroundBrush" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="AegisPrimaryTextBrush" Color="#F3F6FC" />
-          <SolidColorBrush x:Key="AegisSecondaryTextBrush" Color="#B7C0CF" />
-          <SolidColorBrush x:Key="AegisTertiaryTextBrush" Color="#98A5B8" />
+          <SolidColorBrush x:Key="AegisPageBackgroundBrush" Color="#111426" />
+          <SolidColorBrush x:Key="AegisCardBackgroundBrush" Color="#1C2137" />
+          <SolidColorBrush x:Key="AegisSubtleSurfaceBrush" Color="#272A47" />
+          <SolidColorBrush x:Key="AegisBorderBrush" Color="#454B70" />
+          <SolidColorBrush x:Key="AegisAccentBrush" Color="#B096FF" />
+          <SolidColorBrush x:Key="AegisAccentForegroundBrush" Color="#211340" />
+          <SolidColorBrush x:Key="AegisPrimaryTextBrush" Color="#F5F5FF" />
+          <SolidColorBrush x:Key="AegisSecondaryTextBrush" Color="#C1C7E2" />
+          <SolidColorBrush x:Key="AegisTertiaryTextBrush" Color="#B1BAD8" />
           <SolidColorBrush x:Key="AegisQuestionBackgroundBrush" Color="#244F9A" />
           <SolidColorBrush x:Key="AegisQuestionHoverBrush" Color="#2F62B9" />
           <SolidColorBrush x:Key="AegisQuestionBorderBrush" Color="#8AB4FF" />
@@ -87,9 +89,9 @@
         <Setter Property="Foreground" Value="{ThemeResource AegisTertiaryTextBrush}" />
       </Style>
       <Style x:Key="AegisPageTitleTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
-        <Setter Property="FontSize" Value="28" />
+        <Setter Property="FontSize" Value="30" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LineHeight" Value="34" />
+        <Setter Property="LineHeight" Value="38" />
       </Style>
       <Style x:Key="AegisCardHeadingTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
         <Setter Property="FontSize" Value="18" />
@@ -100,6 +102,24 @@
         <Setter Property="FontSize" Value="16" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="LineHeight" Value="22" />
+      </Style>
+      <Style x:Key="InvestigationReportHeadingStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisSectionHeadingTextStyle}">
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="LineHeight" Value="24" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{ThemeResource AegisAccentBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+      </Style>
+      <Style x:Key="InvestigationReportBodyStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource AegisPrimaryTextBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+      </Style>
+      <Style x:Key="InvestigationReportBulletStyle" TargetType="TextBlock" BasedOn="{StaticResource InvestigationReportBodyStyle}">
+        <Setter Property="FontSize" Value="20" />
+        <Setter Property="Foreground" Value="{ThemeResource AegisAccentBrush}" />
+      </Style>
+      <Style x:Key="InvestigationReportSectionStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource AegisSubtleSurfaceBrush}" />
       </Style>
       <Style x:Key="AegisLeadTextStyle" TargetType="TextBlock" BasedOn="{StaticResource AegisBodyTextStyle}">
         <Setter Property="FontSize" Value="15" />
