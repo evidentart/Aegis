@@ -78,6 +78,21 @@ For an AI-assisted investigation, the question and the evidence needed for plann
 
 Aegis is a source-build Windows x64 application. Its investigations are on demand and use a small set of registered read-only observations; it is not a general-purpose computer-control or continuous monitoring tool. AI-generated interpretations can be uncertain and should be read alongside the available evidence.
 
+## Design Philosophy & Future Possibilities
+
+Aegis explores how AI can assist with Windows system diagnostics while keeping observation and control clearly separated.
+
+The current implementation focuses on a deliberately limited set of read-only system observations. This is a design choice: Aegis is intended to help users understand what's happening on their computers, not give an autonomous agent unrestricted access to their systems.
+
+The architecture leaves room for future development, including:
+
+- **Deeper diagnostics:** Broader performance monitoring, resource analysis, and Windows event correlation.
+- **Richer investigations:** Multi-step diagnostic workflows, comparisons, and more detailed evidence-based explanations.
+- **Visual insights:** Historical trends, performance charts, and clearer relationships between observations.
+- **Extensibility:** Additional explicitly approved diagnostic tools with well-defined permissions and execution limits.
+
+Aegis demonstrates a foundation for AI-assisted system investigation, with opportunities to expand its diagnostic capabilities without compromising its read-only, user-controlled approach.
+
 ## Copyright and licensing
 
 Copyright © 2026 Ali Akcin.
